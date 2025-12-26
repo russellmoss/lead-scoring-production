@@ -299,7 +299,17 @@ v4_enriched AS (
 ),
 
 -- ============================================================================
--- K. APPLY V3.2 TIER LOGIC WITH NARRATIVES
+-- K. APPLY V4 DEPRIORITIZATION FILTER (Bottom 20% excluded)
+-- ============================================================================
+-- Optimization: Remove bottom 20% V4 scores to improve overall conversion rate
+v4_filtered AS (
+    SELECT *
+    FROM v4_enriched
+    WHERE v4_percentile >= 20 OR v4_percentile IS NULL  -- Filter bottom 20%
+),
+
+-- ============================================================================
+-- K2. APPLY V3.2 TIER LOGIC WITH NARRATIVES
 -- ============================================================================
 scored_prospects AS (
     SELECT 
@@ -318,8 +328,10 @@ scored_prospects AS (
             WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 'TIER_1F_HV_WEALTH_BLEEDER'
             WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 'TIER_2_PROVEN_MOVER'
             WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 'TIER_3_MODERATE_BLEEDER'
-            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 'TIER_4_EXPERIENCED_MOVER'
-            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 'TIER_5_HEAVY_BLEEDER'
+            -- OPTION C: TIER_4_EXPERIENCED_MOVER EXCLUDED (converts at baseline 2.74%, no value)
+            -- OPTION C: TIER_5_HEAVY_BLEEDER EXCLUDED (marginal lift 3.42%, not worth including)
+            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 'STANDARD'  -- Map to STANDARD (excluded)
+            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 'STANDARD'  -- Map to STANDARD (excluded)
             ELSE 'STANDARD'
         END as score_tier,
         
@@ -336,8 +348,9 @@ scored_prospects AS (
             WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 4
             WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 5
             WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 6
-            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 7
-            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 8
+            -- OPTION C: TIER_4 and TIER_5 excluded (map to 99)
+            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 99  -- TIER_4 excluded
+            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 99  -- TIER_5 excluded
             ELSE 99
         END as priority_rank,
         
@@ -354,8 +367,9 @@ scored_prospects AS (
             WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 0.065
             WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 0.052
             WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 0.044
-            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 0.041
-            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 0.038
+            -- OPTION C: TIER_4 and TIER_5 excluded (map to STANDARD rate)
+            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 0.025  -- TIER_4 excluded
+            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 0.025  -- TIER_5 excluded
             ELSE 0.025
         END as expected_conversion_rate,
         
@@ -390,17 +404,16 @@ scored_prospects AS (
             WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN
                 CONCAT(firm_name, ' has experienced moderate advisor departures (net change: ', CAST(firm_net_change_12mo AS STRING), '). ',
                        first_name, ' is likely hearing about opportunities from departing colleagues. Moderate Bleeder tier: 4.4% expected conversion.')
+            -- OPTION C: TIER_4 and TIER_5 excluded (map to STANDARD narrative)
             WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN
-                CONCAT(first_name, ' is a ', CAST(industry_tenure_years AS STRING), '-year veteran who recently moved to ', firm_name, 
-                       '. A veteran who recently changed firms will move for the right opportunity. Experienced Mover: 4.1% expected conversion.')
+                CONCAT(first_name, ' at ', firm_name, ' - STANDARD tier lead (TIER_4 excluded per Option C optimization).')
             WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN
-                CONCAT(firm_name, ' is losing ', CAST(ABS(firm_net_change_12mo) AS STRING), ' advisors (net). ', first_name, 
-                       ' is watching the workplace destabilize. Heavy Bleeder tier: 3.8% expected conversion.')
+                CONCAT(first_name, ' at ', firm_name, ' - STANDARD tier lead (TIER_5 excluded per Option C optimization).')
             ELSE
-                CONCAT(first_name, ' at ', firm_name, ' - checking for V4 upgrade eligibility.')
+                CONCAT(first_name, ' at ', firm_name, ' - STANDARD tier lead.')
         END as v3_score_narrative
         
-    FROM v4_enriched ep
+    FROM v4_filtered ep
 ),
 
 -- ============================================================================
@@ -437,75 +450,57 @@ diversity_filtered AS (
 ),
 
 -- ============================================================================
--- O. APPLY TIER QUOTAS + V4 UPGRADE PATH (Dynamic based on SGA count)
+-- O. APPLY TIER QUOTAS + HIGH-V4 STANDARD BACKFILL (Dynamic based on SGA count)
 -- ============================================================================
+-- Optimization: Removed V4_UPGRADE tier (underperforms). Use high-V4 STANDARD for backfill only.
 tier_limited AS (
     SELECT 
         df.*,
-        -- V4 upgrade flag
+        -- High-V4 STANDARD flag (for backfill only, not a separate tier)
         CASE 
             WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 1 
             ELSE 0 
-        END as is_v4_upgrade,
-        -- Final tier
+        END as is_high_v4_standard,
+        -- Final tier (keep STANDARD, mark as HIGH_V4 for backfill)
         CASE 
-            WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 'V4_UPGRADE'
+            WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 'STANDARD_HIGH_V4'
             ELSE df.score_tier 
         END as final_tier,
-        -- Final expected rate
+        -- Final expected rate (updated based on optimization analysis)
         CASE 
-            WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 0.046
+            WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 0.035  -- High-V4 STANDARD: 3.5%
+            WHEN df.score_tier = 'TIER_1B_PRIME_MOVER_SERIES65' THEN 0.1176  -- Updated from optimization
+            WHEN df.score_tier = 'TIER_1F_HV_WEALTH_BLEEDER' THEN 0.0606  -- Updated from optimization
+            WHEN df.score_tier = 'TIER_2_PROVEN_MOVER' THEN 0.0591  -- Updated from optimization
+            WHEN df.score_tier = 'TIER_1_PRIME_MOVER' THEN 0.0476  -- Updated from optimization
+            WHEN df.score_tier = 'TIER_1A_PRIME_MOVER_CFP' THEN 0.0274  -- Updated from optimization
             ELSE df.expected_conversion_rate 
         END as final_expected_rate,
-        -- FINAL NARRATIVE: V3 or V4 SHAP
-        -- Always use SQL-generated narrative for V4 upgrades (has all feature names properly handled)
+        -- FINAL NARRATIVE: V3 or High-V4 STANDARD
         CASE 
             WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN
                 CONCAT(
-                    'V4 Model Upgrade: ', df.first_name, ' at ', df.firm_name, 
-                    ' identified as high-potential lead (V4 score: ', CAST(ROUND(df.v4_score, 2) AS STRING), 
-                    ', ', CAST(df.v4_percentile AS STRING), 'th percentile). ',
-                    -- Include the SHAP-based explanation
+                    'High-V4 STANDARD (Backfill): ', df.first_name, ' at ', df.firm_name, 
+                    ' identified by ML model as above-average potential (V4: ', CAST(df.v4_percentile AS STRING), 'th percentile). ',
                     CASE 
                         WHEN df.shap_top1_feature = 'short_tenure_x_high_mobility' THEN 
-                            'Key factors: This advisor is relatively new at their current firm AND has a history of changing firms - a strong signal they may move again. '
+                            'Key factors: New at current firm with history of changing firms. '
                         WHEN df.shap_top1_feature = 'mobility_x_heavy_bleeding' THEN 
-                            'Key factors: This advisor has demonstrated career mobility AND works at a firm losing advisors - a powerful combination. '
-                        WHEN df.shap_top1_feature = 'mobility_tier' THEN 
-                            'Key factor: This advisor has demonstrated willingness to change firms in the past. '
-                        WHEN df.shap_top1_feature = 'firm_stability_tier' THEN 
-                            'Key factor: This advisor works at a firm experiencing advisor departures. '
-                        WHEN df.shap_top1_feature = 'tenure_bucket' THEN 
-                            'Key factor: This advisor has favorable tenure at their current firm (1-4 years). '
-                        WHEN df.shap_top1_feature = 'experience_bucket' THEN 
-                            'Key factor: This advisor has significant industry experience with a portable book. '
-                        WHEN df.shap_top1_feature = 'is_broker_protocol' THEN 
-                            'Key factor: Their firm participates in the Broker Protocol, making transitions smoother. '
+                            'Key factors: Career mobility at a firm losing advisors. '
                         WHEN df.shap_top1_feature = 'firm_net_change_12mo' THEN 
-                            'Key factor: Their firm is losing advisors, creating workplace instability. '
-                        WHEN df.shap_top1_feature = 'firm_rep_count_at_contact' THEN 
-                            'Key factor: Works at a smaller firm with more autonomy. '
-                        WHEN df.shap_top1_feature = 'is_wirehouse' THEN 
-                            'Key factor: Not at a wirehouse, fewer restrictions on moving. '
-                        WHEN df.shap_top1_feature = 'has_linkedin' THEN 
-                            'Key factor: Verified LinkedIn profile available for outreach. '
-                        WHEN df.shap_top1_feature = 'has_email' THEN 
-                            'Key factor: Verified email contact information available. '
-                        WHEN df.shap_top1_feature = 'has_firm_data' THEN 
-                            'Key factor: Complete firm data available for analysis. '
-                        WHEN df.shap_top1_feature = 'is_experience_missing' THEN 
-                            'Key factor: Complete experience data available. '
-                        ELSE 
-                            CONCAT('Key factor: ', COALESCE(REPLACE(df.shap_top1_feature, '_', ' '), 'ML-identified pattern'), '. ')
+                            'Key factor: Firm experiencing advisor departures. '
+                        WHEN df.shap_top1_feature = 'tenure_bucket' THEN 
+                            'Key factor: Favorable tenure (1-4 years). '
+                        ELSE 'ML-identified pattern suggests above-average conversion potential. '
                     END,
-                    'Historical conversion: 4.60% (1.42x baseline). Track as V4 Upgrade.'
+                    'Expected conversion: 3.5% (backfill tier).'
                 )
             ELSE df.v3_score_narrative
         END as score_narrative,
         ROW_NUMBER() OVER (
             PARTITION BY 
                 CASE 
-                    WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 'V4_UPGRADE'
+                    WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 'STANDARD_HIGH_V4'
                     ELSE df.score_tier 
                 END
             ORDER BY 
@@ -517,7 +512,9 @@ tier_limited AS (
                 df.crd
         ) as tier_rank
     FROM diversity_filtered df
-    WHERE df.score_tier != 'STANDARD'
+    -- Priority tiers always included; STANDARD only if high-V4 (for backfill)
+    -- OPTION C: EXCLUDE TIER_4 and TIER_5 (they convert at/below baseline)
+    WHERE (df.score_tier != 'STANDARD' AND df.score_tier NOT IN ('TIER_4_EXPERIENCED_MOVER', 'TIER_5_HEAVY_BLEEDER'))
        OR (df.score_tier = 'STANDARD' AND df.v4_percentile >= 80)
 ),
 
@@ -535,10 +532,9 @@ linkedin_prioritized AS (
                     WHEN 'TIER_1_PRIME_MOVER' THEN 3
                     WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 4
                     WHEN 'TIER_2_PROVEN_MOVER' THEN 5
-                    WHEN 'V4_UPGRADE' THEN 6
-                    WHEN 'TIER_3_MODERATE_BLEEDER' THEN 7
-                    WHEN 'TIER_4_EXPERIENCED_MOVER' THEN 8
-                    WHEN 'TIER_5_HEAVY_BLEEDER' THEN 9
+                    WHEN 'TIER_3_MODERATE_BLEEDER' THEN 6
+                    -- OPTION C: TIER_4 and TIER_5 excluded
+                    WHEN 'STANDARD_HIGH_V4' THEN 7  -- Backfill only
                 END,
                 source_priority,
                 has_linkedin DESC,
@@ -556,10 +552,8 @@ linkedin_prioritized AS (
                             WHEN 'TIER_1_PRIME_MOVER' THEN 3
                             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 4
                             WHEN 'TIER_2_PROVEN_MOVER' THEN 5
-                            WHEN 'V4_UPGRADE' THEN 6
-                            WHEN 'TIER_3_MODERATE_BLEEDER' THEN 7
-                            WHEN 'TIER_4_EXPERIENCED_MOVER' THEN 8
-                            WHEN 'TIER_5_HEAVY_BLEEDER' THEN 9
+                            WHEN 'TIER_3_MODERATE_BLEEDER' THEN 6
+                            -- OPTION C: TIER_4 and TIER_5 excluded
                         END,
                         source_priority,
                         v4_percentile DESC,
@@ -578,9 +572,10 @@ linkedin_prioritized AS (
         OR (final_tier = 'TIER_1F_HV_WEALTH_BLEEDER' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))
         OR (final_tier = 'TIER_2_PROVEN_MOVER' AND tier_rank <= CAST(1500 * sc.total_sgas / 12.0 AS INT64))
         OR (final_tier = 'TIER_3_MODERATE_BLEEDER' AND tier_rank <= CAST(300 * sc.total_sgas / 12.0 AS INT64))
-        OR (final_tier = 'TIER_4_EXPERIENCED_MOVER' AND tier_rank <= CAST(300 * sc.total_sgas / 12.0 AS INT64))
-        OR (final_tier = 'TIER_5_HEAVY_BLEEDER' AND tier_rank <= CAST(1500 * sc.total_sgas / 12.0 AS INT64))
-        OR (final_tier = 'V4_UPGRADE' AND tier_rank <= CAST(500 * sc.total_sgas / 12.0 AS INT64))
+        -- OPTION C: TIER_4_EXPERIENCED_MOVER EXCLUDED (converts at baseline 2.74%)
+        -- OPTION C: TIER_5_HEAVY_BLEEDER EXCLUDED (marginal lift 3.42%)
+        -- STANDARD_HIGH_V4: Backfill only after priority tiers exhausted
+        OR (final_tier = 'STANDARD_HIGH_V4' AND tier_rank <= CAST(600 * sc.total_sgas / 12.0 AS INT64))
 ),
 
 -- ============================================================================
@@ -596,21 +591,23 @@ leads_with_conv_bucket AS (
         sc.total_sgas,
         -- Create conversion rate buckets for stratified distribution
         CASE 
-            WHEN lp.final_expected_rate >= 0.08 THEN 'HIGH_CONV'      -- 8%+ (T1A, T1B)
-            WHEN lp.final_expected_rate >= 0.06 THEN 'MED_HIGH_CONV'  -- 6-8% (T1, T1F)
+            WHEN lp.final_expected_rate >= 0.10 THEN 'HIGH_CONV'      -- 10%+ (T1B)
+            WHEN lp.final_expected_rate >= 0.06 THEN 'MED_HIGH_CONV'  -- 6-10% (T1, T1F)
             WHEN lp.final_expected_rate >= 0.05 THEN 'MED_CONV'       -- 5-6% (T2)
-            WHEN lp.final_expected_rate >= 0.04 THEN 'MED_LOW_CONV'   -- 4-5% (T3, T4, V4_UPGRADE)
-            ELSE 'LOW_CONV'                                            -- <4% (T5, STANDARD)
+            WHEN lp.final_expected_rate >= 0.04 THEN 'MED_LOW_CONV'   -- 4-5% (T3, T4)
+            WHEN lp.final_expected_rate >= 0.03 THEN 'LOW_CONV'       -- 3-4% (T5, STANDARD_HIGH_V4)
+            ELSE 'VERY_LOW_CONV'                                       -- <3% (should not appear)
         END as conv_rate_bucket,
         -- Rank within conversion bucket and tier for round-robin
         ROW_NUMBER() OVER (
             PARTITION BY 
                 CASE 
-                    WHEN lp.final_expected_rate >= 0.08 THEN 'HIGH_CONV'
+                    WHEN lp.final_expected_rate >= 0.10 THEN 'HIGH_CONV'
                     WHEN lp.final_expected_rate >= 0.06 THEN 'MED_HIGH_CONV'
                     WHEN lp.final_expected_rate >= 0.05 THEN 'MED_CONV'
                     WHEN lp.final_expected_rate >= 0.04 THEN 'MED_LOW_CONV'
-                    ELSE 'LOW_CONV'
+                    WHEN lp.final_expected_rate >= 0.03 THEN 'LOW_CONV'
+                    ELSE 'VERY_LOW_CONV'
                 END,
                 lp.final_tier
             ORDER BY lp.overall_rank
@@ -767,12 +764,13 @@ SELECT
     END as lead_source_description,
     
     -- V4 columns
-    ROUND(v4_score, 4) as v4_score,
+    ROUND(v4_score, 4) as     v4_score,
     v4_percentile,
-    is_v4_upgrade,
+    is_high_v4_standard,
     CASE 
-        WHEN is_v4_upgrade = 1 THEN 'V4 Upgrade (STANDARD with V4 >= 80%)'
-        ELSE 'V3 Tier Qualified'
+        WHEN is_high_v4_standard = 1 THEN 'High-V4 STANDARD (Backfill)'
+        WHEN score_tier != 'STANDARD_HIGH_V4' THEN 'V3 Tier Qualified'
+        ELSE 'STANDARD'
     END as v4_status,
     shap_top1_feature,
     shap_top2_feature,

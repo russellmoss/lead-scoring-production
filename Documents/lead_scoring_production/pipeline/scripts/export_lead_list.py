@@ -53,7 +53,7 @@ EXPORT_COLUMNS = [
     'score_narrative',
     'v4_score',
     'v4_percentile',
-    'is_v4_upgrade',
+    'is_high_v4_standard',
     'v4_status',
     'shap_top1_feature',
     'shap_top2_feature',
@@ -227,7 +227,10 @@ def validate_export(df, df_excluded=None):
     print("VALIDATION CHECKS")
     print("=" * 70)
     
-    # Check if is_v4_upgrade column exists
+    # Check if is_high_v4_standard column exists
+    has_high_v4_col = 'is_high_v4_standard' in df.columns
+    high_v4_standard_count = df['is_high_v4_standard'].sum() if has_high_v4_col else 0
+    # Also check for legacy is_v4_upgrade column for backward compatibility
     has_v4_upgrade_col = 'is_v4_upgrade' in df.columns
     v4_upgrade_count = df['is_v4_upgrade'].sum() if has_v4_upgrade_col else 0
     
@@ -238,13 +241,15 @@ def validate_export(df, df_excluded=None):
         "has_job_title": df['job_title'].notna().sum() if 'job_title' in df.columns else 0,
         "has_narrative": df['score_narrative'].notna().sum() if 'score_narrative' in df.columns else 0,
         "has_linkedin": (df['linkedin_url'].notna() & (df['linkedin_url'] != '')).sum(),
-        "v4_upgrade_count": v4_upgrade_count,
+        "high_v4_standard_count": high_v4_standard_count,
+        "v4_upgrade_count": v4_upgrade_count,  # Legacy support
     }
     
     validation_results['job_title_pct'] = validation_results['has_job_title'] / len(df) * 100 if len(df) > 0 else 0
     validation_results['narrative_pct'] = validation_results['has_narrative'] / len(df) * 100 if len(df) > 0 else 0
     validation_results['linkedin_pct'] = validation_results['has_linkedin'] / len(df) * 100 if len(df) > 0 else 0
-    validation_results['v4_upgrade_pct'] = validation_results['v4_upgrade_count'] / len(df) * 100 if len(df) > 0 else 0
+    validation_results['high_v4_standard_pct'] = validation_results['high_v4_standard_count'] / len(df) * 100 if len(df) > 0 else 0
+    validation_results['v4_upgrade_pct'] = validation_results['v4_upgrade_count'] / len(df) * 100 if len(df) > 0 else 0  # Legacy
     
     # Print validation results
     print(f"Row Count: {validation_results['row_count']:,}")
@@ -254,7 +259,10 @@ def validate_export(df, df_excluded=None):
     print(f"Narrative Coverage: {validation_results['has_narrative']:,} ({validation_results['narrative_pct']:.1f}%)")
     print(f"LinkedIn Coverage: {validation_results['has_linkedin']:,} ({validation_results['linkedin_pct']:.1f}%)")
     
-    print(f"\nV4 Upgrades: {validation_results['v4_upgrade_count']:,} ({validation_results['v4_upgrade_pct']:.1f}%)")
+    if high_v4_standard_count > 0:
+        print(f"\nHigh-V4 STANDARD (Backfill): {validation_results['high_v4_standard_count']:,} ({validation_results['high_v4_standard_pct']:.1f}%)")
+    if v4_upgrade_count > 0:
+        print(f"Legacy V4 Upgrades: {validation_results['v4_upgrade_count']:,} ({validation_results['v4_upgrade_pct']:.1f}%) [Note: V4_UPGRADE tier removed in optimization]")
     
     # Check for excluded firms
     savvy_count = len(df[df['firm_crd'] == 318493]) if 'firm_crd' in df.columns else 0
@@ -384,7 +392,8 @@ def log_results(validation_results, output_path, df, df_excluded=None, excluded_
 - LinkedIn Coverage: **{validation_results['has_linkedin']:,}** ({validation_results['linkedin_pct']:.1f}%)
 
 **V4 Upgrade Path:**
-- V4 Upgraded Leads: **{validation_results['v4_upgrade_count']:,}** ({validation_results['v4_upgrade_pct']:.1f}%)
+- High-V4 STANDARD (Backfill): **{validation_results['high_v4_standard_count']:,}** ({validation_results['high_v4_standard_pct']:.1f}%)
+- Legacy V4 Upgrades: **{validation_results['v4_upgrade_count']:,}** ({validation_results['v4_upgrade_pct']:.1f}%) [Note: V4_UPGRADE tier removed in optimization]
 
 **Firm Exclusions:**
 - Savvy (CRD 318493): **{savvy_count}** {'EXCLUDED' if savvy_count == 0 else 'PRESENT'}
@@ -397,7 +406,7 @@ def log_results(validation_results, output_path, df, df_excluded=None, excluded_
         tier_dist = df['score_tier'].value_counts().sort_index()
         for tier, count in tier_dist.items():
             pct = count / len(df) * 100
-            marker = " ⬆️ V4 UPGRADE" if tier == 'V4_UPGRADE' else ""
+            marker = " [BACKFILL]" if tier == 'STANDARD_HIGH_V4' else (" [LEGACY]" if tier == 'V4_UPGRADE' else "")
             log_entry += f"- {tier}: **{count:,}** ({pct:.1f}%){marker}\n"
     
     # Add excluded leads info
@@ -427,13 +436,13 @@ The CSV includes the following columns:
 8. `linkedin_url` - LinkedIn profile URL
 9. `firm_name` - Firm name
 10. `firm_crd` - Firm CRD ID
-11. `score_tier` - Final tier (V3 tier or V4_UPGRADE)
-12. `original_v3_tier` - Original V3 tier before upgrade
+11. `score_tier` - Final tier (V3 tier or STANDARD_HIGH_V4 for backfill)
+12. `original_v3_tier` - Original V3 tier (STANDARD for backfill leads)
 13. `expected_rate_pct` - Expected conversion rate (%)
 14. `score_narrative` - **NEW!** Human-readable explanation (V3 rules or V4 SHAP)
 15. `v4_score` - V4 XGBoost score
 16. `v4_percentile` - V4 percentile rank (1-100)
-17. `is_v4_upgrade` - **1 = V4 upgraded lead, 0 = V3 tier lead**
+17. `is_high_v4_standard` - **1 = High-V4 STANDARD (backfill), 0 = V3 tier lead**
 18. `v4_status` - Description of V4 status
 19. `shap_top1_feature` - **NEW!** Most important ML feature
 20. `shap_top2_feature` - **NEW!** Second most important feature

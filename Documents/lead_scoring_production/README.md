@@ -1,6 +1,6 @@
 # Lead Scoring Production Pipeline - Hybrid V3 + V4 Model
 
-**Version**: 2.0  
+**Version**: 3.1 (Option C: Maximized Lead List)  
 **Last Updated**: December 2025  
 **Status**: Production Ready
 
@@ -24,15 +24,24 @@
 
 This repository contains a **hybrid lead scoring system** that combines:
 
-- **V3 Rules-Based Model**: Tiered classification system (T1A, T1B, T1, T2, T3, T4, T5) achieving **1.74x top decile lift**
-- **V4 XGBoost ML Model**: Machine learning model that upgrades STANDARD tier leads with high conversion potential (4.60% conversion rate for top 20%)
+- **V3 Rules-Based Model**: Tiered classification system based on validated SGA expertise (T1A, T1B, T1, T1F, T2, T3)
+- **V4 XGBoost ML Model**: Machine learning model for deprioritization (bottom 20%) and intelligent backfill identification
 
-**Key Results:**
-- **Target Output**: 200 leads per active SGA (dynamically calculated)
-- **V3 Tier Performance**: Top tiers convert at 7.41% - 16.48% (vs 3.20% baseline)
-- **V4 Upgrade Performance**: STANDARD leads with V4 ≥ 80th percentile convert at 4.60% (1.42x baseline)
-- **Expected Improvement**: +6-12% overall conversion rate
-- **Equitable Distribution**: Each SGA receives exactly 200 leads with similar expected conversion rates
+**Key Results (January 2026 Lead List):**
+- **Total Leads**: 2,768 (198 per SGA across 14 SGAs)
+- **Expected Conversion Rate**: **4.61%** (vs 2.74% baseline)
+- **Expected MQLs**: **128 total** (9.1 per SGA)
+- **Improvement vs Baseline**: **+68.5%**
+- **Confidence**: 99.98% probability of exceeding baseline
+- **Methodology**: Option C - Only tiers that convert significantly above baseline (TIER_4 and TIER_5 excluded)
+
+**Tier Performance (Historical Rates):**
+- **T1B** (Series 65 Only): 11.76% (4.3x baseline)
+- **T3** (Moderate Bleeder): 6.76% (2.5x baseline)
+- **T1F** (Wealth Bleeder): 6.06% (2.2x baseline)
+- **T2** (Proven Mover): 5.91% (2.2x baseline)
+- **T1** (Prime Mover): 4.76% (1.7x baseline)
+- **HIGH_V4** (ML Backfill): 3.67% (1.3x baseline)
 
 **Monthly Time Estimate**: 15-20 minutes once pipeline is set up
 
@@ -75,7 +84,7 @@ python scripts/export_lead_list.py
 # Output: pipeline/exports/january_2026_lead_list_YYYYMMDD.csv
 ```
 
-**Expected Output**: CSV file with 200 leads per active SGA (e.g., 3,000 leads for 15 SGAs) ready for Salesforce import
+**Expected Output**: CSV file with ~200 leads per active SGA (e.g., 2,768 leads for 14 SGAs) ready for Salesforce import
 
 ---
 
@@ -246,21 +255,22 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_scores`;
    - Filters out wirehouses, insurance firms, excluded titles
    - Only processes NEW_PROSPECT or recyclable leads
 
-3. **V4 Integration**:
+3. **V4 Integration (Option C)**:
    - Joins V4 scores from `ml_features.v4_prospect_scores`
-   - **Upgrade Path**: STANDARD tier leads with V4 ≥ 80th percentile → upgraded to `V4_UPGRADE` tier
-   - Expected conversion: 4.60% for V4 upgrades (1.42x baseline)
+   - **Deprioritization**: Filters out bottom 20% V4 scores across all tiers
+   - **Backfill Identification**: STANDARD tier leads with V4 ≥ 80th percentile used for backfill only
+   - Expected conversion: 3.67% for HIGH_V4 backfill (1.3x baseline)
 
-3. **Tier Quotas**:
+3. **Tier Quotas (Option C - TIER_4 and TIER_5 Excluded)**:
    - T1A: 50 leads
    - T1B: 60 leads
    - T1: 300 leads
    - T1F: 50 leads
    - T2: 1,500 leads
    - T3: 300 leads
-   - T4: 300 leads
-   - T5: 1,500 leads
-   - **V4_UPGRADE: 500 leads** (NEW)
+   - **TIER_4: EXCLUDED** (converts at baseline 2.74%, no value)
+   - **TIER_5: EXCLUDED** (marginal lift 3.42%, not worth including)
+   - **STANDARD_HIGH_V4: ~200-400 leads** (backfill only, after priority tiers exhausted)
 
 4. **Final Filtering**:
    - Firm diversity cap (max 50 leads per firm)
@@ -276,14 +286,14 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_scores`;
 
 **Validation Queries**:
 
-**1. Tier Distribution**:
+**1. Tier Distribution (Option C)**:
 ```sql
 SELECT 
     score_tier,
     COUNT(*) as leads,
     ROUND(AVG(v4_percentile), 1) as avg_v4_percentile,
     ROUND(AVG(expected_rate_pct), 2) as avg_expected_conv_pct,
-    SUM(CASE WHEN is_v4_upgrade = 1 THEN 1 ELSE 0 END) as v4_upgrades
+    SUM(CASE WHEN is_high_v4_standard = 1 THEN 1 ELSE 0 END) as high_v4_backfill
 FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
 GROUP BY score_tier
 ORDER BY 
@@ -293,11 +303,17 @@ ORDER BY
         WHEN 'TIER_1_PRIME_MOVER' THEN 3
         WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 4
         WHEN 'TIER_2_PROVEN_MOVER' THEN 5
-        WHEN 'V4_UPGRADE' THEN 6
-        WHEN 'TIER_3_MODERATE_BLEEDER' THEN 7
-        WHEN 'TIER_4_EXPERIENCED_MOVER' THEN 8
-        WHEN 'TIER_5_HEAVY_BLEEDER' THEN 9
+        WHEN 'TIER_3_MODERATE_BLEEDER' THEN 6
+        WHEN 'STANDARD_HIGH_V4' THEN 7
     END;
+```
+
+**1a. Verify TIER_4 and TIER_5 Exclusion**:
+```sql
+SELECT COUNT(*) as excluded_tier_4_5
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+WHERE score_tier IN ('TIER_4_EXPERIENCED_MOVER', 'TIER_5_HEAVY_BLEEDER');
+-- Expected: 0 (Option C exclusion)
 ```
 
 **2. Salesforce Matching Validation**:
@@ -323,10 +339,11 @@ WHERE prospect_type = 'NEW_PROSPECT'
 ```
 
 **Expected Results**:
-- Total leads: 200 × number of active SGAs (e.g., 3,000 for 15 SGAs)
-- V4 upgrades: ~500 leads (20.8%)
+- Total leads: ~200 × number of active SGAs (e.g., 2,768 for 14 SGAs)
+- TIER_4 and TIER_5: **0 leads** (excluded per Option C)
+- STANDARD_HIGH_V4 backfill: ~200-400 leads (7-15%)
 - Average V4 percentile: ~75-85 (higher is better)
-- Tier distribution: See tier quotas above
+- Tier distribution: T1A, T1B, T1, T1F, T2, T3, STANDARD_HIGH_V4 only
 - **NEW_PROSPECT**: Typically 80-90% of leads (not in Salesforce)
 - **Recyclable**: Typically 10-20% of leads (in Salesforce, 180+ days no contact)
 - **NEW_PROSPECT with salesforce_lead_id**: Should be **0** (data quality check)
@@ -383,13 +400,12 @@ python scripts/export_lead_list.py
 - `linkedin_url`: LinkedIn profile URL
 - `firm_name`: Firm name
 - `firm_crd`: Firm CRD ID
-- `score_tier`: Final tier (V3 tier or V4_UPGRADE)
-- `original_v3_tier`: Original V3 tier before upgrade
+- `score_tier`: Final tier (V3 tier or STANDARD_HIGH_V4)
 - `expected_rate_pct`: Expected conversion rate (%)
 - `score_narrative`: Human-readable explanation (V3 rules or V4 SHAP)
 - `v4_score`: V4 XGBoost score (0-1)
 - `v4_percentile`: V4 percentile rank (1-100)
-- `is_v4_upgrade`: 1 = V4 upgraded lead, 0 = V3 tier lead
+- `is_high_v4_standard`: 1 = HIGH_V4 backfill lead, 0 = V3 tier lead
 - `v4_status`: Description of V4 status
 - `shap_top1_feature`: Most important ML feature driving score
 - `shap_top2_feature`: Second most important feature
@@ -397,13 +413,15 @@ python scripts/export_lead_list.py
 - `prospect_type`: NEW_PROSPECT or recyclable
 - `sga_owner`: Assigned SGA name (automatically assigned)
 - `sga_id`: Assigned SGA Salesforce ID (for matching)
-- `list_rank`: Overall ranking in list (1 to total_leads_needed)
+- `priority_rank`: Overall ranking in list (1 to total_leads_needed)
+- `tier_category`: Tier category for reporting
 
 **Validation**:
-- Row count: 200 × number of active SGAs
+- Row count: ~200 × number of active SGAs (e.g., 2,768 for 14 SGAs)
 - Duplicate CRDs: 0
 - Missing required fields: < 1%
 - Excluded firms (Savvy, Ritholtz): 0
+- TIER_4 and TIER_5 leads: 0 (Option C exclusion)
 
 ---
 
@@ -411,33 +429,34 @@ python scripts/export_lead_list.py
 
 ### V3 Rules-Based Model
 
-**Philosophy**: Transparent, explainable business rules that assign leads to priority tiers.
+**Philosophy**: Transparent, explainable business rules based on validated SGA expertise that assign leads to priority tiers.
 
-**Tier Definitions**:
+**Tier Definitions (Option C - Only Tiers Above Baseline)**:
 
-| Tier | Criteria | Conversion Rate | Lift |
-|------|----------|----------------|------|
-| **T1A** | CFP holder + 1-4yr tenure + 5+yr experience + bleeding firm | 16.44% | 4.30x |
-| **T1B** | Series 65 only + Tier 1 criteria | 16.48% | 4.31x |
-| **T1** | 1-4yr tenure + 5-15yr experience + bleeding firm + small firm | 13.21% | 3.46x |
-| **T1F** | High-value wealth title + bleeding firm | 12.78% | 3.35x |
-| **T2** | 3+ prior firms + 5+yr experience | 8.59% | 2.50x |
-| **T3** | Firm losing 1-10 advisors + 5+yr experience | 9.52% | 2.77x |
-| **T4** | 20+yr experience + 1-4yr tenure (recent mover) | 11.54% | 3.35x |
-| **T5** | Firm losing 10+ advisors + 5+yr experience | 7.27% | 2.11x |
-| **STANDARD** | All other leads | 3.82% | 1.0x |
+| Tier | Criteria | Historical Rate | vs Baseline (2.74%) | Status |
+|------|----------|----------------|---------------------|--------|
+| **T1B** | Series 65 only + Tier 1 criteria | 11.76% | 4.3x | ✅ Included |
+| **T1A** | CFP holder + 1-4yr tenure + 5+yr experience + bleeding firm | ~10%+ | 3.6x+ | ✅ Included |
+| **T3** | Firm losing 1-10 advisors + 5+yr experience | 6.76% | 2.5x | ✅ Included |
+| **T1F** | High-value wealth title + bleeding firm | 6.06% | 2.2x | ✅ Included |
+| **T2** | 3+ prior firms + 5+yr experience | 5.91% | 2.2x | ✅ Included |
+| **T1** | 1-4yr tenure + 5-15yr experience + bleeding firm + small firm | 4.76% | 1.7x | ✅ Included |
+| **TIER_4** | 20+yr experience + 1-4yr tenure (recent mover) | 2.74% | 1.0x | ❌ **EXCLUDED** (Option C) |
+| **TIER_5** | Firm losing 10+ advisors + 5+yr experience | 3.42% | 1.2x | ❌ **EXCLUDED** (Option C) |
+| **STANDARD** | All other leads | 2.60% | 0.95x | ❌ Excluded (unless HIGH_V4) |
 
 **Key Design Principles**:
 1. **Zero Data Leakage**: All features calculated using Point-in-Time (PIT) methodology
 2. **Transparent Rules**: Every tier assignment is explainable
 3. **Statistical Validation**: All tiers validated with confidence intervals
 4. **Temporal Validation**: Tested on future data (August-October 2025)
+5. **Option C Optimization**: Only tiers that convert significantly above baseline are included
 
 ---
 
 ### V4 XGBoost ML Model
 
-**Philosophy**: Machine learning model that identifies high-potential leads missed by V3 rules.
+**Philosophy**: Machine learning model that deprioritizes low-potential leads and identifies intelligent backfill candidates.
 
 **Algorithm**: XGBoost (Gradient Boosting)
 - **Objective**: Binary classification (logistic)
@@ -451,15 +470,17 @@ python scripts/export_lead_list.py
 - **Top Decile Lift**: 1.51x
 - **Bottom 20% Conversion**: 1.33% (0.42x lift - deprioritization signal)
 
-**Use Case**: **Upgrade Path** for STANDARD tier leads
-- STANDARD leads with V4 ≥ 80th percentile convert at **4.60%** (1.42x baseline)
-- Historical validation: 1,174 leads at 4.60% conversion rate
-- Expected improvement: +6-12% overall conversion rate
+**Use Cases (Option C)**:
+1. **Deprioritization**: Filters out bottom 20% V4 scores across all tiers
+2. **Backfill Identification**: STANDARD tier leads with V4 ≥ 80th percentile used for backfill only
+   - HIGH_V4 backfill converts at **3.67%** (1.3x baseline)
+   - Historical validation: 6,043 leads at 3.67% conversion rate
+   - Only used after priority tiers (T1-T3) are exhausted
 
 **Why Hybrid Approach?**:
-- V3 excels at **prioritization** (identifying top tiers)
-- V4 excels at **upgrading STANDARD leads** (finding hidden gems)
-- Combined: Best of both worlds
+- V3 excels at **prioritization** (identifying top tiers based on validated SGA expertise)
+- V4 excels at **filtering and backfilling** (removing worst leads, finding best remaining candidates)
+- Combined: Maximum conversion rate while maintaining volume targets
 
 ---
 
@@ -680,26 +701,29 @@ Based on XGBoost feature importance (gain-based):
 
 ---
 
-### Hybrid Approach Validation
+### Hybrid Approach Validation (Option C)
 
-**Investigation Findings** (V3 vs V4 Comparison):
+**Investigation Findings**:
 
 | Finding | Evidence | Action |
 |---------|----------|--------|
-| V3 tier ordering validated | T1 converts at 7.41% vs T2 at 3.20% | ✅ Keep V3 prioritization |
-| V4 better at prediction | V4 AUC-ROC (0.6141) > V3 AUC-ROC (0.5095) | ✅ Use V4 for upgrades |
-| V4 deprioritization not adding value | 90% of V3 leads scored in top 10% | ❌ Removed deprioritization filter |
-| STANDARD + V4 ≥ 80% converts at 4.60% | 1,174 historical leads validated | ✅ Added upgrade path |
+| V3 tier ordering validated | T1B converts at 11.76% vs T2 at 5.91% | ✅ Keep V3 prioritization |
+| TIER_4 converts at baseline | 2.74% = baseline, no value added | ❌ **EXCLUDED** (Option C) |
+| TIER_5 marginal lift | 3.42% = only 1.2x baseline | ❌ **EXCLUDED** (Option C) |
+| V4 deprioritization effective | Bottom 20% converts at 1.33% (0.42x) | ✅ Applied across all tiers |
+| STANDARD + V4 ≥ 80% converts at 3.67% | 6,043 historical leads validated | ✅ Used for backfill only |
 
-**Hybrid Strategy**:
-- **V3 Rules**: Primary prioritization (T1-T5 tiers)
-- **V4 ML**: Upgrade path for STANDARD tier leads (V4 ≥ 80th percentile)
-- **Expected Improvement**: +6-12% overall conversion rate
+**Hybrid Strategy (Option C)**:
+- **V3 Rules**: Primary prioritization (T1A, T1B, T1, T1F, T2, T3 only)
+- **V4 ML**: Deprioritization (bottom 20%) + backfill identification (STANDARD with V4 ≥ 80th percentile)
+- **Expected Improvement**: +68.5% vs baseline (4.61% vs 2.74%)
 
-**Validation Results**:
-- V4 upgrades: 500 leads at 4.60% conversion (vs 3.82% STANDARD baseline)
-- Expected additional conversions: ~4 conversions per month
-- Efficiency gain: No additional SDR effort (same 200 leads per SGA)
+**Validation Results (January 2026)**:
+- Total leads: 2,768 (198 per SGA)
+- Expected conversion: 4.61% (128 MQLs)
+- Conservative estimate (P10): 3.85% (107 MQLs)
+- P(exceed baseline): 99.98%
+- P(exceed 5%): 25.3%
 
 ---
 
@@ -858,12 +882,16 @@ lead_scoring_production/
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| Baseline conversion rate | 3.20% | Historical data |
-| V3 T1A conversion rate | 16.44% | V3 validation |
-| V3 T1B conversion rate | 16.48% | V3 validation |
-| V4 upgrade conversion rate | 4.60% | V4 validation |
-| Target leads per month | 2,400 | Business requirement |
-| V4 upgrade quota | 500 leads | Hybrid strategy |
+| Baseline conversion rate (Provided Lead List) | 2.74% | Historical data (32,264 leads) |
+| V3 T1B conversion rate | 11.76% | V3 validation (34 leads) |
+| V3 T3 conversion rate | 6.76% | V3 validation (74 leads) |
+| V3 T1F conversion rate | 6.06% | V3 validation (99 leads) |
+| V3 T2 conversion rate | 5.91% | V3 validation (711 leads) |
+| V3 T1 conversion rate | 4.76% | V3 validation (42 leads) |
+| HIGH_V4 backfill conversion rate | 3.67% | V4 validation (6,043 leads) |
+| Target leads per month | ~2,800 | Business requirement (200 per SGA) |
+| January 2026 actual leads | 2,768 | Generated list |
+| Expected conversion rate | 4.61% | Option C backtest |
 
 ### Monthly Checklist
 
@@ -901,19 +929,22 @@ lead_scoring_production/
 - [ ] File location: ___________
 
 ### Summary
-- **Total Leads**: ___________ (should be 200 × number of active SGAs)
-- **Leads per SGA**: ___________ (should be exactly 200)
+- **Total Leads**: ___________ (should be ~200 × number of active SGAs)
+- **Leads per SGA**: ___________ (should be ~200)
 - **Number of Active SGAs**: ___________
-- **V4 Upgrades**: ___________ (should be ~500)
+- **TIER_4 and TIER_5**: ___________ (should be 0 - Option C exclusion)
+- **STANDARD_HIGH_V4 Backfill**: ___________ (should be ~200-400)
 - **Avg V4 Percentile**: ___________
 - **New Prospects**: ___________
 - **Recyclable Leads**: ___________
+- **Expected Conversion Rate**: ___________ (should be ~4.6%)
 ```
 
 ---
 
 ## References
 
+- **Lead Scoring Methodology**: `Lead_Scoring_Methodology_Final.md` ⭐ **Primary methodology document**
 - **V3 Model Report**: `v3/VERSION_3_MODEL_REPORT.md`
 - **V4 Model Report**: `v4/VERSION_4_MODEL_REPORT.md`
 - **Architecture Overview**: `docs/FINTRX_Architecture_Overview.md`
@@ -923,8 +954,9 @@ lead_scoring_production/
 
 ---
 
-**Document Version**: 2.0  
+**Document Version**: 3.1 (Option C: Maximized Lead List)  
 **Last Updated**: December 2025  
+**Methodology**: Based on validated SGA expertise - see `Lead_Scoring_Methodology_Final.md`  
 **Maintainer**: Data Science Team  
 **Questions?**: Contact the Data Science team
 
