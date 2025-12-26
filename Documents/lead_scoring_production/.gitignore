@@ -1,0 +1,254 @@
+# ============================================================================
+# Lead Scoring Repository - Git Ignore
+# ============================================================================
+# This file prevents committing sensitive credentials, large data files,
+# and temporary/system files to the repository.
+# ============================================================================
+
+# ===== CREDENTIALS & SECRETS (NEVER COMMIT!) =====
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Google Cloud credentials (EXPLICIT - these contain secrets)
+**/gcloud-user-credentials.json
+**/n8n-*-key.json
+**/n8n_*-key.json
+**/service-account-*.json
+**/credentials.json
+**/*-credentials.json
+**/*-key.json
+**/*credentials*.json
+**/*key*.json
+
+# N8N manifest files (may contain credentials)
+**/manifest.json
+**/n8n_exports/*.json
+
+# API keys and secrets directories
+**/secrets/
+**/secret/
+
+# ===== PYTHON =====
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+venv.bak/
+env.bak/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ===== DATA FILES =====
+# Large data files (CSV, Excel, etc.)
+# CSV files - EXCLUDE ALL (may contain PII/sensitive data)
+*.csv
+**/*.csv
+**/exports/*.csv
+**/data/**/*.csv
+**/output/**/*.csv
+**/results/**/*.csv
+!**/requirements.txt
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# ===== SYSTEM FILES =====
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+__MACOSX/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+
+# ===== IDE & EDITOR FILES =====
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Cursor
+.cursor/
+
+# ===== LOGS =====
+*.log
+logs/
+*.log.*
+
+# ===== TEMPORARY FILES =====
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*.swp
+*.swo
+*~
+
+# ===== PROJECT SPECIFIC =====
+# Output directories (may contain sensitive data)
+Broker_protocol/output/
+Broker_protocol/temp/
+Broker_protocol/logs/
+Broker_protocol/data/
+discovery_data/
+FinTrx data/
+
+# Big datasets / vendor feeds (explicit)
+**/discovery_data/
+Broker_protocol/experiments/output/
+
+# But keep directory structure files
+!Broker_protocol/output/.gitkeep
+!Broker_protocol/temp/.gitkeep
+!Broker_protocol/data/.gitkeep
+!Broker_protocol/logs/.gitkeep
+
+# Experiment outputs (may contain PII)
+**/experiments/output/
+**/experiments/results/
+
+# Model artifacts (large binary files)
+**/models/**/*.pkl
+**/models/**/*.joblib
+**/models/**/*.h5
+**/models/**/*.pb
+
+# ===== KEEP THESE =====
+# Always commit these important files
+!.gitignore
+!README.md
+!requirements.txt
+!*.md
+!*.sql
+!*.py
+!*.js
+!*.ts
+!*.ipynb
+!*.sh
+!*.bat
+!*.ps1
+
+# Model metadata JSON files are OK (not credentials)
+!**/model_registry*.json
+!**/registry.json
+!**/feature_names.json
+!**/training_metrics.json
+!**/hyperparameters.json
+!**/calibration_metadata*.json
+!**/narrative_templates.json
+!**/date_config.json
+!**/backtest_config.json
+!**/*statistics.json
+!**/*analysis.json
+!**/*report.json
+!**/*metadata*.json
+!**/*config.json
+!**/*schema.json
+!**/*contract.json
+!**/*mapping.json
+!**/*droplist.json
+!**/*results.json
+!**/*findings.json
+!**/*indices*.json
+!**/*order*.json
+!**/*selected*.json
+!**/*payloads*.json
+!**/*metrics.json
+!**/*params.json
+!**/*catalog.json
+!**/*snapshot*.json
+!**/*fold*.json
+!**/*v*.json
+!**/*_v*.json
+!**/*version*.json
+
+# ===== NOTES =====
+# This .gitignore prevents committing:
+# 1. Credential files (gcloud-user-credentials.json, n8n-*-key.json, manifest.json)
+# 2. Large data files (CSV, Excel, database files)
+# 3. Generated outputs and temporary files
+# 4. System/IDE files
+# 5. Logs and cache files
+#
+# But DOES commit:
+# - All source code (Python, SQL, JavaScript, etc.)
+# - Documentation files (Markdown)
+# - Configuration templates (not actual credentials)
+# - Model metadata JSON files (not credentials)

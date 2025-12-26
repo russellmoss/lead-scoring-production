@@ -1,0 +1,22 @@
+{
+  "v4.0.0": {
+    "model_version": "v4.0.0",
+    "model_type": "XGBoost",
+    "training_date": "2025-12-24T15:11:32.592253",
+    "status": "production",
+    "deployment_strategy": "hybrid",
+    "use_case": "deprioritization_filter",
+    "test_metrics": {
+      "auc_roc": 0.5988588624111034,
+      "auc_pr": 0.04323772079970412,
+      "top_decile_lift": 1.5089087631724902,
+      "top_5pct_lift": 1.4544573643410852
+    },
+    "feature_count": 14,
+    "deprioritization_threshold": 20,
+    "bottom_20pct_conv_rate": 0.0133,
+    "top_80pct_conv_rate": 0.0366,
+    "efficiency_gain": "11.7%",
+    "notes": "V4 is deployed as deprioritization filter (skip bottom 20%) alongside V3 prioritization"
+  }
+}
