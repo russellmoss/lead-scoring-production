@@ -19,16 +19,17 @@
 -- - V3 Rules: Tier assignment with rich human-readable narratives
 -- - V4.1 XGBoost: Upgrade path with SHAP-based narratives
 -- - Job Titles: Included in output for SDR context
--- - Firm Exclusions: Savvy Wealth and Ritholtz excluded
+-- - Firm Exclusions: Managed in ml_features.excluded_firms table
+--                    (easier to maintain - no SQL edits needed)
 --
 -- FIRM EXCLUSIONS:
--- - Savvy Advisors, Inc. (CRD 318493) - Internal firm
--- - Ritholtz Wealth Management (CRD 168652) - Partner firm
+-- - Managed in ml_features.excluded_firms (pattern-based) and ml_features.excluded_firm_crds (CRD-based)
+-- - See pipeline/sql/manage_excluded_firms.sql for adding/removing exclusions
 --
--- OUTPUT: ml_features.january_2026_lead_list_v4 (SAME TABLE, updated contents)
+-- OUTPUT: ml_features.january_2026_lead_list (NEW SINGLE TABLE - replaces old tables)
 -- ============================================================================
 
-CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4` AS
+CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.january_2026_lead_list` AS
 
 WITH 
 -- ============================================================================
@@ -58,34 +59,20 @@ sga_constants AS (
 ),
 
 -- ============================================================================
--- B. EXCLUSIONS (Wirehouses + Insurance + Specific Firms)
+-- B. EXCLUSIONS (Reference centralized tables)
+-- ============================================================================
+-- Firm exclusions now managed in: ml_features.excluded_firms
+-- To add/remove exclusions, update that table instead of this SQL
 -- ============================================================================
 excluded_firms AS (
-    SELECT firm_pattern FROM UNNEST([
-        -- Wirehouses
-        '%J.P. MORGAN%', '%MORGAN STANLEY%', '%MERRILL%', '%WELLS FARGO%', 
-        '%UBS %', '%UBS,%', '%EDWARD JONES%', '%AMERIPRISE%', 
-        '%NORTHWESTERN MUTUAL%', '%PRUDENTIAL%', '%RAYMOND JAMES%',
-        '%FIDELITY%', '%SCHWAB%', '%VANGUARD%', '%GOLDMAN SACHS%', '%CITIGROUP%',
-        '%LPL FINANCIAL%', '%COMMONWEALTH%', '%CETERA%', '%CAMBRIDGE%',
-        '%OSAIC%', '%PRIMERICA%',
-        -- Insurance
-        '%STATE FARM%', '%ALLSTATE%', '%NEW YORK LIFE%', '%NYLIFE%',
-        '%TRANSAMERICA%', '%FARM BUREAU%', '%NATIONWIDE%',
-        '%LINCOLN FINANCIAL%', '%MASS MUTUAL%', '%MASSMUTUAL%',
-        '%INSURANCE%',
-        -- Specific firm name exclusions (backup for CRD exclusion)
-        '%SAVVY WEALTH%', '%SAVVY ADVISORS%',
-        '%RITHOLTZ%'
-    ]) as firm_pattern
+    SELECT pattern as firm_pattern
+    FROM `savvy-gtm-analytics.ml_features.excluded_firms`
 ),
 
--- NEW: Specific CRD exclusions for Savvy and Ritholtz
+-- Specific CRD exclusions managed in: ml_features.excluded_firm_crds
 excluded_firm_crds AS (
-    SELECT firm_crd FROM UNNEST([
-        318493,  -- Savvy Advisors, Inc.
-        168652   -- Ritholtz Wealth Management
-    ]) as firm_crd
+    SELECT firm_crd
+    FROM `savvy-gtm-analytics.ml_features.excluded_firm_crds`
 ),
 
 -- ============================================================================
@@ -225,14 +212,17 @@ base_prospects AS (
         c.TITLE_NAME as job_title
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
     LEFT JOIN salesforce_crds sf ON c.RIA_CONTACT_CRD_ID = sf.crd
+    -- Exclude by firm name pattern (LEFT JOIN approach for BigQuery compatibility)
+    LEFT JOIN excluded_firms ef ON UPPER(c.PRIMARY_FIRM_NAME) LIKE ef.firm_pattern
+    -- Exclude by firm CRD
+    LEFT JOIN excluded_firm_crds ec ON SAFE_CAST(c.PRIMARY_FIRM AS INT64) = ec.firm_crd
     WHERE c.CONTACT_FIRST_NAME IS NOT NULL AND c.CONTACT_LAST_NAME IS NOT NULL
       AND c.PRIMARY_FIRM_START_DATE IS NOT NULL AND c.PRIMARY_FIRM_NAME IS NOT NULL
       AND c.PRIMARY_FIRM IS NOT NULL
       AND c.PRODUCING_ADVISOR = TRUE
-      -- Exclude by firm name pattern
-      AND NOT EXISTS (SELECT 1 FROM excluded_firms ef WHERE UPPER(c.PRIMARY_FIRM_NAME) LIKE ef.firm_pattern)
-      -- NEW: Exclude by firm CRD (Savvy 318493, Ritholtz 168652)
-      AND SAFE_CAST(c.PRIMARY_FIRM AS INT64) NOT IN (SELECT firm_crd FROM excluded_firm_crds)
+      -- Exclude matched patterns and CRDs
+      AND ef.firm_pattern IS NULL
+      AND ec.firm_crd IS NULL
       -- Title exclusions
       AND NOT (
           UPPER(c.TITLE_NAME) LIKE '%FINANCIAL SOLUTIONS ADVISOR%'
@@ -504,20 +494,57 @@ tier_limited AS (
         CASE 
             WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN
                 CONCAT(
-                    'High-V4 STANDARD (Backfill): ', df.first_name, ' at ', df.firm_name, 
-                    ' identified by ML model as above-average potential (V4: ', CAST(df.v4_percentile AS STRING), 'th percentile). ',
-                    CASE 
-                        WHEN df.shap_top1_feature = 'short_tenure_x_high_mobility' THEN 
-                            'Key factors: New at current firm with history of changing firms. '
-                        WHEN df.shap_top1_feature = 'mobility_x_heavy_bleeding' THEN 
-                            'Key factors: Career mobility at a firm losing advisors. '
-                        WHEN df.shap_top1_feature = 'firm_net_change_12mo' THEN 
-                            'Key factor: Firm experiencing advisor departures. '
-                        WHEN df.shap_top1_feature = 'tenure_bucket' THEN 
-                            'Key factor: Favorable tenure (1-4 years). '
-                        ELSE 'ML-identified pattern suggests above-average conversion potential. '
+                    df.first_name, ' at ', df.firm_name, ' - ML model identified key signals: ',
+                    CASE df.shap_top1_feature
+                        WHEN 'is_ia_rep_type' THEN 'pure investment advisor (no BD ties)'
+                        WHEN 'is_independent_ria' THEN 'independent RIA (portable book)'
+                        WHEN 'is_dual_registered' THEN 'dual-registered (flexible transition options)'
+                        WHEN 'mobility_3yr' THEN 'history of firm moves'
+                        WHEN 'short_tenure_x_high_mobility' THEN 'short tenure combined with high mobility'
+                        WHEN 'mobility_x_heavy_bleeding' THEN 'mobile advisor at a firm losing advisors'
+                        WHEN 'experience_years' THEN 'significant industry experience'
+                        WHEN 'tenure_months' THEN 'tenure pattern suggests transition readiness'
+                        WHEN 'firm_net_change_12mo' THEN 'firm instability (net advisor losses)'
+                        WHEN 'firm_departures_corrected' THEN 'firm experiencing departures'
+                        WHEN 'bleeding_velocity_encoded' THEN 'accelerating firm departures'
+                        WHEN 'is_recent_mover' THEN 'recently changed firms (proven mobility)'
+                        WHEN 'days_since_last_move' THEN 'timing since last move suggests readiness'
+                        WHEN 'has_firm_data' THEN 'strong data profile'
+                        WHEN 'has_email' THEN 'contactable (email available)'
+                        WHEN 'has_linkedin' THEN 'professional presence (LinkedIn)'
+                        WHEN 'is_wirehouse' THEN 'wirehouse advisor (large book potential)'
+                        WHEN 'is_broker_protocol' THEN 'broker protocol firm (easier transition)'
+                        ELSE REPLACE(df.shap_top1_feature, '_', ' ')
                     END,
-                    'Expected conversion: 3.5% (backfill tier).'
+                    CASE WHEN df.shap_top2_feature IS NOT NULL THEN CONCAT(', ',
+                        CASE df.shap_top2_feature
+                            WHEN 'is_ia_rep_type' THEN 'IA rep type'
+                            WHEN 'is_independent_ria' THEN 'independent RIA'
+                            WHEN 'is_dual_registered' THEN 'dual-registered'
+                            WHEN 'mobility_3yr' THEN 'mobility history'
+                            WHEN 'short_tenure_x_high_mobility' THEN 'short tenure + mobility'
+                            WHEN 'mobility_x_heavy_bleeding' THEN 'mobile + bleeding firm'
+                            WHEN 'experience_years' THEN 'experience level'
+                            WHEN 'firm_net_change_12mo' THEN 'firm instability'
+                            WHEN 'firm_departures_corrected' THEN 'firm departures'
+                            WHEN 'bleeding_velocity_encoded' THEN 'departure acceleration'
+                            WHEN 'is_recent_mover' THEN 'recent mover'
+                            WHEN 'has_firm_data' THEN 'data quality'
+                            ELSE REPLACE(df.shap_top2_feature, '_', ' ')
+                        END
+                    ) ELSE '' END,
+                    CASE WHEN df.shap_top3_feature IS NOT NULL THEN CONCAT(', ',
+                        CASE df.shap_top3_feature
+                            WHEN 'is_ia_rep_type' THEN 'IA rep type'
+                            WHEN 'is_independent_ria' THEN 'independent RIA'
+                            WHEN 'is_dual_registered' THEN 'dual-registered'
+                            WHEN 'mobility_3yr' THEN 'mobility pattern'
+                            WHEN 'experience_years' THEN 'experience'
+                            WHEN 'has_firm_data' THEN 'profile completeness'
+                            ELSE REPLACE(df.shap_top3_feature, '_', ' ')
+                        END
+                    ) ELSE '' END,
+                    '. V4 Score: ', CAST(df.v4_percentile AS STRING), 'th percentile. Expected conversion: 3.5%.'
                 )
             ELSE df.v3_score_narrative
         END as score_narrative,
@@ -543,11 +570,40 @@ tier_limited AS (
 ),
 
 -- ============================================================================
--- P. LINKEDIN PRIORITIZATION (Dynamic tier quotas based on SGA count)
+-- P. DEDUPLICATE BEFORE TIER QUOTAS (CRITICAL: Preserve priority tier leads)
+-- ============================================================================
+-- Deduplicate by CRD BEFORE applying tier quotas to ensure priority tiers aren't lost
+-- Keep the best-ranked instance of each CRD
+-- ============================================================================
+deduplicated_before_quotas AS (
+    SELECT 
+        tl.*
+    FROM tier_limited tl
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY tl.crd
+        ORDER BY 
+            CASE tl.final_tier
+                WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 1
+                WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 2
+                WHEN 'TIER_1_PRIME_MOVER' THEN 3
+                WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 4
+                WHEN 'TIER_2_PROVEN_MOVER' THEN 5
+                WHEN 'TIER_3_MODERATE_BLEEDER' THEN 6
+                WHEN 'STANDARD_HIGH_V4' THEN 7
+            END,
+            tl.source_priority,
+            tl.has_linkedin DESC,
+            tl.v4_percentile DESC,
+            tl.crd
+    ) = 1
+),
+
+-- ============================================================================
+-- P2. LINKEDIN PRIORITIZATION (Dynamic tier quotas based on SGA count)
 -- ============================================================================
 linkedin_prioritized AS (
     SELECT 
-        tl.*,
+        dtl.*,
         ROW_NUMBER() OVER (
             ORDER BY 
                 CASE final_tier
@@ -584,12 +640,27 @@ linkedin_prioritized AS (
                         crd
                 )
             ELSE NULL
-        END as no_linkedin_rank
-    FROM tier_limited tl
+        END as no_linkedin_rank,
+        ROW_NUMBER() OVER (
+            PARTITION BY 
+                CASE 
+                    WHEN final_tier = 'STANDARD' AND v4_percentile >= 80 THEN 'STANDARD_HIGH_V4'
+                    ELSE final_tier 
+                END
+            ORDER BY 
+                source_priority,
+                has_linkedin DESC,
+                v4_percentile DESC,
+                priority_rank,
+                CASE WHEN firm_net_change_12mo < 0 THEN ABS(firm_net_change_12mo) ELSE 0 END DESC,
+                crd
+        ) as tier_rank
+    FROM deduplicated_before_quotas dtl
     CROSS JOIN sga_constants sc
     WHERE 
         -- Dynamic tier quotas: Scale proportionally to ensure we have enough leads
         -- Base quotas are for 12 SGAs (2400 leads), scale up/down based on actual SGA count
+        -- NOTE: These quotas are applied AFTER deduplication, so we have unique leads
         (final_tier = 'TIER_1A_PRIME_MOVER_CFP' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))
         OR (final_tier = 'TIER_1B_PRIME_MOVER_SERIES65' AND tier_rank <= CAST(60 * sc.total_sgas / 12.0 AS INT64))
         OR (final_tier = 'TIER_1_PRIME_MOVER' AND tier_rank <= CAST(300 * sc.total_sgas / 12.0 AS INT64))
@@ -603,45 +674,56 @@ linkedin_prioritized AS (
 ),
 
 -- ============================================================================
--- Q. SGA ASSIGNMENT (Equitable distribution based on expected conversion rate)
+-- Q. DEDUPLICATED LEADS (Already deduplicated, just pass through)
+-- ============================================================================
+deduplicated_leads AS (
+    SELECT 
+        lp.*
+    FROM linkedin_prioritized lp
+    -- Already deduplicated in deduplicated_before_quotas, so no need to dedupe again
+),
+
+-- ============================================================================
+-- Q2. SGA ASSIGNMENT (Equitable distribution based on expected conversion rate)
 -- ============================================================================
 -- Strategy: Distribute leads using stratified round-robin within conversion rate buckets
 -- This ensures each SGA gets similar expected conversion value, not just tier distribution
 -- Each SGA will receive exactly 200 leads with equitable conversion rate distribution
 leads_with_conv_bucket AS (
     SELECT 
-        lp.*,
+        dl.*,
         sc.total_leads_needed,
         sc.total_sgas,
         -- Create conversion rate buckets for stratified distribution
         CASE 
-            WHEN lp.final_expected_rate >= 0.10 THEN 'HIGH_CONV'      -- 10%+ (T1B)
-            WHEN lp.final_expected_rate >= 0.06 THEN 'MED_HIGH_CONV'  -- 6-10% (T1, T1F)
-            WHEN lp.final_expected_rate >= 0.05 THEN 'MED_CONV'       -- 5-6% (T2)
-            WHEN lp.final_expected_rate >= 0.04 THEN 'MED_LOW_CONV'   -- 4-5% (T3, T4)
-            WHEN lp.final_expected_rate >= 0.03 THEN 'LOW_CONV'       -- 3-4% (T5, STANDARD_HIGH_V4)
+            WHEN dl.final_expected_rate >= 0.10 THEN 'HIGH_CONV'      -- 10%+ (T1B)
+            WHEN dl.final_expected_rate >= 0.06 THEN 'MED_HIGH_CONV'  -- 6-10% (T1, T1F)
+            WHEN dl.final_expected_rate >= 0.05 THEN 'MED_CONV'       -- 5-6% (T2)
+            WHEN dl.final_expected_rate >= 0.04 THEN 'MED_LOW_CONV'   -- 4-5% (T3, T4)
+            WHEN dl.final_expected_rate >= 0.03 THEN 'LOW_CONV'       -- 3-4% (T5, STANDARD_HIGH_V4)
             ELSE 'VERY_LOW_CONV'                                       -- <3% (should not appear)
         END as conv_rate_bucket,
         -- Rank within conversion bucket and tier for round-robin
         ROW_NUMBER() OVER (
             PARTITION BY 
                 CASE 
-                    WHEN lp.final_expected_rate >= 0.10 THEN 'HIGH_CONV'
-                    WHEN lp.final_expected_rate >= 0.06 THEN 'MED_HIGH_CONV'
-                    WHEN lp.final_expected_rate >= 0.05 THEN 'MED_CONV'
-                    WHEN lp.final_expected_rate >= 0.04 THEN 'MED_LOW_CONV'
-                    WHEN lp.final_expected_rate >= 0.03 THEN 'LOW_CONV'
+                    WHEN dl.final_expected_rate >= 0.10 THEN 'HIGH_CONV'
+                    WHEN dl.final_expected_rate >= 0.06 THEN 'MED_HIGH_CONV'
+                    WHEN dl.final_expected_rate >= 0.05 THEN 'MED_CONV'
+                    WHEN dl.final_expected_rate >= 0.04 THEN 'MED_LOW_CONV'
+                    WHEN dl.final_expected_rate >= 0.03 THEN 'LOW_CONV'
                     ELSE 'VERY_LOW_CONV'
                 END,
-                lp.final_tier
-            ORDER BY lp.overall_rank
+                dl.final_tier
+            ORDER BY dl.overall_rank
         ) as rank_within_bucket
-    FROM linkedin_prioritized lp
+    FROM deduplicated_leads dl
     CROSS JOIN sga_constants sc
     WHERE 
-        lp.has_linkedin = 1 
-        OR (lp.has_linkedin = 0 AND lp.no_linkedin_rank <= CAST(240 * sc.total_sgas / 12.0 AS INT64))
-    QUALIFY ROW_NUMBER() OVER (ORDER BY lp.overall_rank) <= sc.total_leads_needed
+        dl.has_linkedin = 1 
+        OR (dl.has_linkedin = 0 AND dl.no_linkedin_rank <= CAST(240 * sc.total_sgas / 12.0 AS INT64))
+    -- NOTE: No limit here - we already deduplicated, so we want all unique leads
+    -- The SGA assignment will handle distributing them
 ),
 
 -- Assign SGA using round-robin within conversion buckets
@@ -725,6 +807,8 @@ leads_with_sga AS (
 -- 
 -- Logic: Tier 1 leads with V4.1 < 60th percentile are likely false positives
 -- V4.1 now has bleeding signal built-in, so it better understands V3 rules
+-- 
+-- NOTE: Deduplication already happened BEFORE SGA assignment, so no need to dedupe again
 -- ============================================================================
 final_lead_list AS (
     SELECT 

@@ -78,7 +78,7 @@ python scripts/score_prospects_monthly.py
 
 # Step 3: Generate hybrid lead list
 # Run SQL: pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql
-# Creates: ml_features.january_2026_lead_list_v4
+# Creates: ml_features.january_2026_lead_list
 
 # Step 4: Export to CSV
 python scripts/export_lead_list.py
@@ -110,7 +110,7 @@ python scripts/export_lead_list.py
 │                                                                  │
 │  STEP 3: Run Hybrid Lead List Query                            │
 │     └─> SQL: January_2026_Lead_List_V3_V4_Hybrid.sql            │
-│     └─> Output: ml_features.january_2026_lead_list_v4          │
+│     └─> Output: ml_features.january_2026_lead_list              │
 │     └─> Purpose: Combine V3 tiers + V4 upgrades → 200 leads per SGA  │
 │                                                                  │
 │  STEP 4: Export to CSV                                          │
@@ -242,7 +242,13 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_scores`;
 
 **What It Does**:
 
-1. **Salesforce Matching & Prioritization**:
+1. **Firm Exclusions (Centralized)**:
+   - References `ml_features.excluded_firms` for pattern-based exclusions
+   - References `ml_features.excluded_firm_crds` for CRD-based exclusions
+   - Excludes wirehouses, insurance BDs, large IBDs, custodians, internal/partner firms
+   - See "Firm Exclusions" section below for management details
+
+2. **Salesforce Matching & Prioritization**:
    - **Checks Salesforce**: Queries `SavvyGTMData.Lead` table to find existing leads by CRD
    - **NEW_PROSPECT**: Leads NOT in Salesforce (preferred - highest priority)
    - **Recyclable Leads**: Leads in Salesforce with 180+ days since last SMS/Call activity
@@ -251,18 +257,29 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_scores`;
    - **Excluded**: Leads in Salesforce that don't meet recyclable criteria (recently contacted, bad status, etc.)
    - **Priority**: NEW_PROSPECT (priority 1) > Recyclable (priority 2)
 
-2. **V3 Tier Assignment**:
+2. **Firm Exclusions**:
+   - **Centralized Exclusion System**: Firm exclusions are managed in BigQuery tables (not hardcoded in SQL)
+   - **Pattern-Based Exclusions**: `ml_features.excluded_firms` table contains 42 exclusion patterns
+     - Categories: Wirehouse, Large IBD, Custodian, Insurance, Insurance BD, Bank BD, Internal, Partner
+     - Examples: Morgan Stanley, Merrill, LPL Financial, Prudential, OneAmerica, etc.
+   - **CRD-Based Exclusions**: `ml_features.excluded_firm_crds` table for specific firm CRDs
+     - Examples: Savvy Advisors (318493), Ritholtz Wealth (168652)
+   - **Benefits**: Easy to add/remove exclusions without editing SQL
+   - **Management**: See `pipeline/sql/manage_excluded_firms.sql` for helper queries
+   - **Documentation**: See `pipeline/sql/CENTRALIZED_EXCLUSIONS_SUMMARY.md` for details
+
+3. **V3 Tier Assignment**:
    - Applies rules-based tier logic (T1A, T1B, T1, T2, T3, T4, T5, STANDARD)
-   - Filters out wirehouses, insurance firms, excluded titles
+   - Filters out excluded firms (from centralized tables), excluded titles
    - Only processes NEW_PROSPECT or recyclable leads
 
-3. **V4 Integration (Option C)**:
+4. **V4 Integration (Option C)**:
    - Joins V4 scores from `ml_features.v4_prospect_scores`
    - **Deprioritization**: Filters out bottom 20% V4 scores across all tiers
    - **Backfill Identification**: STANDARD tier leads with V4 ≥ 80th percentile used for backfill only
    - Expected conversion: 3.67% for HIGH_V4 backfill (1.3x baseline)
 
-3. **Tier Quotas (Option C - TIER_4 and TIER_5 Excluded)**:
+5. **Tier Quotas (Option C - TIER_4 and TIER_5 Excluded)**:
    - T1A: 50 leads
    - T1B: 60 leads
    - T1: 300 leads
@@ -273,7 +290,7 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_scores`;
    - **TIER_5: EXCLUDED** (marginal lift 3.42%, not worth including)
    - **STANDARD_HIGH_V4: ~200-400 leads** (backfill only, after priority tiers exhausted)
 
-4. **Final Filtering**:
+6. **Final Filtering**:
    - Firm diversity cap (max 50 leads per firm)
    - LinkedIn prioritization (prefer leads with LinkedIn)
    - Final limit: 200 leads per active SGA (dynamically calculated)
@@ -281,9 +298,11 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_scores`;
 **Execution**:
 ```sql
 -- Run in BigQuery
--- Creates: ml_features.january_2026_lead_list_v4
--- Expected rows: 200 leads per active SGA (e.g., 3,000 for 15 SGAs)
+-- Creates: ml_features.january_2026_lead_list
+-- Expected rows: 200 leads per active SGA (e.g., 2,800 for 14 SGAs)
 ```
+
+**Note**: The lead list table name is now `ml_features.january_2026_lead_list` (single table, not versioned). Old versioned tables (`january_2026_lead_list_v4`, etc.) are deprecated.
 
 **Validation Queries**:
 
@@ -295,7 +314,7 @@ SELECT
     ROUND(AVG(v4_percentile), 1) as avg_v4_percentile,
     ROUND(AVG(expected_rate_pct), 2) as avg_expected_conv_pct,
     SUM(CASE WHEN is_high_v4_standard = 1 THEN 1 ELSE 0 END) as high_v4_backfill
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 GROUP BY score_tier
 ORDER BY 
     CASE score_tier
@@ -312,9 +331,29 @@ ORDER BY
 **1a. Verify TIER_4 and TIER_5 Exclusion**:
 ```sql
 SELECT COUNT(*) as excluded_tier_4_5
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 WHERE score_tier IN ('TIER_4_EXPERIENCED_MOVER', 'TIER_5_HEAVY_BLEEDER');
 -- Expected: 0 (Option C exclusion)
+```
+
+**1b. Verify Firm Exclusions**:
+```sql
+-- Check no excluded firms slipped through
+SELECT 
+    jl.firm_name,
+    ef.pattern as matched_pattern,
+    ef.category
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list` jl
+INNER JOIN `savvy-gtm-analytics.ml_features.excluded_firms` ef
+    ON UPPER(jl.firm_name) LIKE ef.pattern;
+-- Expected: 0 rows (all excluded firms removed)
+
+-- Check no excluded CRDs slipped through
+SELECT jl.firm_name, jl.firm_crd
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list` jl
+INNER JOIN `savvy-gtm-analytics.ml_features.excluded_firm_crds` ec
+    ON jl.firm_crd = ec.firm_crd;
+-- Expected: 0 rows (all excluded CRDs removed)
 ```
 
 **2. Salesforce Matching Validation**:
@@ -324,7 +363,7 @@ SELECT
     COUNT(*) as lead_count,
     COUNT(DISTINCT salesforce_lead_id) as with_salesforce_id,
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as pct
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 GROUP BY prospect_type;
 ```
 
@@ -333,14 +372,22 @@ GROUP BY prospect_type;
 -- Check: NEW_PROSPECT should NOT have salesforce_lead_id
 SELECT 
     COUNT(*) as new_prospects_with_sf_id
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 WHERE prospect_type = 'NEW_PROSPECT' 
   AND salesforce_lead_id IS NOT NULL;
 -- Expected: 0 (should be 0)
+
+-- Check: Deduplication (each CRD should appear only once)
+SELECT 
+    COUNT(*) as total_leads,
+    COUNT(DISTINCT advisor_crd) as unique_crds,
+    COUNT(*) - COUNT(DISTINCT advisor_crd) as duplicates
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`;
+-- Expected: duplicates = 0
 ```
 
 **Expected Results**:
-- Total leads: ~200 × number of active SGAs (e.g., 2,768 for 14 SGAs)
+- Total leads: ~200 × number of active SGAs (e.g., 2,800 for 14 SGAs)
 - TIER_4 and TIER_5: **0 leads** (excluded per Option C)
 - STANDARD_HIGH_V4 backfill: ~200-400 leads (7-15%)
 - Average V4 percentile: ~75-85 (higher is better)
@@ -348,6 +395,8 @@ WHERE prospect_type = 'NEW_PROSPECT'
 - **NEW_PROSPECT**: Typically 80-90% of leads (not in Salesforce)
 - **Recyclable**: Typically 10-20% of leads (in Salesforce, 180+ days no contact)
 - **NEW_PROSPECT with salesforce_lead_id**: Should be **0** (data quality check)
+- **Excluded firms**: Should be **0** (all wirehouses, insurance BDs, etc. excluded)
+- **Duplicate CRDs**: Should be **0** (each advisor appears only once)
 
 **SGA Assignment** (Automatic):
 - **Each SGA receives exactly 200 leads** with equitable conversion rate distribution
@@ -377,7 +426,7 @@ WHERE prospect_type = 'NEW_PROSPECT'
 **File**: `pipeline/scripts/export_lead_list.py`
 
 **What It Does**:
-1. Fetches lead list from `ml_features.january_2026_lead_list_v4`
+1. Fetches lead list from `ml_features.january_2026_lead_list`
 2. Validates data quality (duplicates, missing fields, exclusions)
 3. Exports to CSV with all required columns
 4. Logs results to `pipeline/logs/EXECUTION_LOG.md`
@@ -418,11 +467,107 @@ python scripts/export_lead_list.py
 - `tier_category`: Tier category for reporting
 
 **Validation**:
-- Row count: ~200 × number of active SGAs (e.g., 2,768 for 14 SGAs)
+- Row count: ~200 × number of active SGAs (e.g., 2,800 for 14 SGAs)
 - Duplicate CRDs: 0
 - Missing required fields: < 1%
-- Excluded firms (Savvy, Ritholtz): 0
+- Excluded firms (from centralized tables): 0
 - TIER_4 and TIER_5 leads: 0 (Option C exclusion)
+
+---
+
+## Firm Exclusions
+
+### Overview
+
+Firm exclusions are managed through **centralized BigQuery tables** rather than hardcoded SQL patterns. This makes exclusions easier to maintain - add/remove firms without editing complex SQL.
+
+### Exclusion Tables
+
+#### 1. `ml_features.excluded_firms` (Pattern-Based)
+- **Purpose**: Pattern-based firm exclusions using SQL `LIKE` patterns
+- **Rows**: 42 patterns
+- **Categories**: 8 (Wirehouse, Large IBD, Custodian, Insurance, Insurance BD, Bank BD, Internal, Partner)
+- **Schema**:
+  - `pattern` (STRING): LIKE pattern (e.g., `'%MERRILL%'`)
+  - `category` (STRING): Exclusion category
+  - `added_date` (DATE): When exclusion was added
+  - `reason` (STRING): Why firm is excluded
+
+**Example Patterns**:
+- Wirehouses: `'%MORGAN STANLEY%'`, `'%MERRILL%'`, `'%WELLS FARGO%'`
+- Large IBDs: `'%LPL FINANCIAL%'`, `'%COMMONWEALTH%'`, `'%CETERA%'`
+- Insurance: `'%PRUDENTIAL%'`, `'%PRUCO%'`, `'%ONEAMERICA%'`, `'%STATE FARM%'`
+- Custodians: `'%FIDELITY%'`, `'%SCHWAB%'`, `'%VANGUARD%'`
+- Internal/Partner: `'%SAVVY WEALTH%'`, `'%RITHOLTZ%'`
+
+#### 2. `ml_features.excluded_firm_crds` (CRD-Based)
+- **Purpose**: Specific firm CRD exclusions (more precise than patterns)
+- **Rows**: 2 CRDs (Savvy 318493, Ritholtz 168652)
+- **Schema**:
+  - `firm_crd` (INT64): Firm CRD number
+  - `firm_name` (STRING): Firm name
+  - `category` (STRING): Exclusion category
+  - `added_date` (DATE): When exclusion was added
+  - `reason` (STRING): Why firm is excluded
+
+### How to Add a New Exclusion
+
+#### Pattern-Based (Recommended)
+```sql
+INSERT INTO `savvy-gtm-analytics.ml_features.excluded_firms` 
+VALUES ('%NEW_FIRM_PATTERN%', 'Category', CURRENT_DATE(), 'Reason for exclusion');
+```
+
+**Example**:
+```sql
+INSERT INTO `savvy-gtm-analytics.ml_features.excluded_firms` 
+VALUES ('%NEW_WIREHOUSE%', 'Wirehouse', CURRENT_DATE(), 'Major wirehouse - captive advisors');
+```
+
+#### CRD-Based (For Specific Firms)
+```sql
+INSERT INTO `savvy-gtm-analytics.ml_features.excluded_firm_crds`
+VALUES (123456, 'Firm Name', 'Category', CURRENT_DATE(), 'Reason for exclusion');
+```
+
+**After Adding**:
+1. Regenerate the lead list: `python pipeline/scripts/execute_january_lead_list.py`
+2. Verify exclusion: Check that the firm no longer appears in `ml_features.january_2026_lead_list`
+
+### How to Remove an Exclusion
+
+```sql
+-- Pattern-based
+DELETE FROM `savvy-gtm-analytics.ml_features.excluded_firms`
+WHERE pattern = '%PATTERN_TO_REMOVE%';
+
+-- CRD-based
+DELETE FROM `savvy-gtm-analytics.ml_features.excluded_firm_crds`
+WHERE firm_crd = 123456;
+```
+
+### Management Helper Queries
+
+See `pipeline/sql/manage_excluded_firms.sql` for:
+- View all exclusions
+- Check if a firm would be excluded
+- Find potential exclusions in prospect data
+- Add/remove exclusions
+
+### Benefits
+
+1. ✅ **Easier Maintenance** - Add/remove exclusions without editing complex SQL
+2. ✅ **Audit Trail** - `added_date` tracks when exclusions were added
+3. ✅ **Documentation** - `reason` explains why each firm is excluded
+4. ✅ **Reusable** - Same tables can be used by future lead lists
+5. ✅ **Queryable** - Easy to see all exclusions and their categories
+
+### Files
+
+- **Table Creation**: `pipeline/sql/create_excluded_firms_table.sql`
+- **CRD Table Creation**: `pipeline/sql/create_excluded_firm_crds_table.sql`
+- **Management Queries**: `pipeline/sql/manage_excluded_firms.sql`
+- **Documentation**: `pipeline/sql/CENTRALIZED_EXCLUSIONS_SUMMARY.md`
 
 ---
 
@@ -760,7 +905,7 @@ Lift by Decile:
 |------|-------------|
 | `ml_features.v4_prospect_features` | V4.1 features (22 features) |
 | `ml_features.v4_prospect_scores` | V4.1 scores with percentiles |
-| `ml_features.january_2026_lead_list_v4` | Final lead list with V4.1 columns |
+| `ml_features.january_2026_lead_list` | Final lead list with V4.1 columns |
 
 ### Monthly Execution Checklist (V4.1)
 
@@ -783,7 +928,7 @@ Lift by Decile:
 
 ### Step 3: Generate Lead List
 - [ ] Run: pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql
-- [ ] Verify: ml_features.january_2026_lead_list_v4 created/updated
+- [ ] Verify: ml_features.january_2026_lead_list created/updated
 - [ ] Lead count: __________
 - [ ] Tier distribution validated
 
@@ -931,7 +1076,7 @@ SELECT
     score_tier,
     COUNT(*) as leads,
     ROUND(AVG(v4_percentile), 1) as avg_v4_percentile
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 GROUP BY score_tier
 ORDER BY COUNT(*) DESC;
 ```
@@ -943,7 +1088,7 @@ SELECT
     COUNT(*) as lead_count,
     ROUND(AVG(expected_rate_pct), 2) as avg_expected_conv_pct,
     ROUND(SUM(expected_rate_pct) / 100.0, 1) as total_expected_mqls
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 GROUP BY sga_owner
 ORDER BY sga_owner;
 ```
@@ -955,7 +1100,7 @@ SELECT
     COUNT(*) as lead_count,
     ROUND(AVG(expected_rate_pct), 2) as avg_expected_conv_pct,
     ROUND(SUM(expected_rate_pct) / 100, 1) as expected_conversions
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 GROUP BY sga_owner
 ORDER BY sga_owner;
 ```
@@ -967,7 +1112,7 @@ SELECT
     score_tier,
     COUNT(*) as count,
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (PARTITION BY sga_owner), 1) as pct
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 GROUP BY sga_owner, score_tier
 ORDER BY sga_owner, score_tier;
 ```
@@ -979,7 +1124,7 @@ SELECT
     COUNT(*) as lead_count,
     COUNT(DISTINCT salesforce_lead_id) as with_salesforce_id,
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as pct
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
 GROUP BY prospect_type
 ORDER BY prospect_type;
 ```
@@ -992,7 +1137,27 @@ SELECT
     SUM(CASE WHEN salesforce_lead_id IS NOT NULL THEN 1 ELSE 0 END) as in_salesforce,
     SUM(CASE WHEN prospect_type = 'NEW_PROSPECT' AND salesforce_lead_id IS NOT NULL THEN 1 ELSE 0 END) as new_prospects_with_sf_id,
     SUM(CASE WHEN prospect_type != 'NEW_PROSPECT' THEN 1 ELSE 0 END) as recyclable_leads
-FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4`;
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`;
+```
+
+**Verify firm exclusions**:
+```sql
+-- Check no excluded firms slipped through
+SELECT 
+    jl.firm_name,
+    ef.pattern as matched_pattern,
+    ef.category
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list` jl
+INNER JOIN `savvy-gtm-analytics.ml_features.excluded_firms` ef
+    ON UPPER(jl.firm_name) LIKE ef.pattern;
+-- Expected: 0 rows
+
+-- Check no excluded CRDs slipped through
+SELECT jl.firm_name, jl.firm_crd
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list` jl
+INNER JOIN `savvy-gtm-analytics.ml_features.excluded_firm_crds` ec
+    ON jl.firm_crd = ec.firm_crd;
+-- Expected: 0 rows
 ```
 
 **Expected Results**:
@@ -1011,10 +1176,15 @@ lead_scoring_production/
 ├── pipeline/                          # Main pipeline directory
 │   ├── sql/
 │   │   ├── v4_prospect_features.sql   # Step 1: Feature calculation
-│   │   └── January_2026_Lead_List_V3_V4_Hybrid.sql  # Step 3: Hybrid query
+│   │   ├── January_2026_Lead_List_V3_V4_Hybrid.sql  # Step 3: Hybrid query
+│   │   ├── create_excluded_firms_table.sql  # Exclusion table creation
+│   │   ├── create_excluded_firm_crds_table.sql  # CRD exclusion table
+│   │   ├── manage_excluded_firms.sql  # Exclusion management queries
+│   │   └── CENTRALIZED_EXCLUSIONS_SUMMARY.md  # Exclusion documentation
 │   ├── scripts/
 │   │   ├── score_prospects_monthly.py # Step 2: ML scoring
-│   │   └── export_lead_list.py        # Step 4: CSV export
+│   │   ├── export_lead_list.py        # Step 4: CSV export
+│   │   └── execute_january_lead_list.py  # Lead list execution helper
 │   ├── exports/                       # CSV output files
 │   ├── logs/                          # Execution logs
 │   └── config/                        # Configuration files
@@ -1023,12 +1193,13 @@ lead_scoring_production/
 │   ├── scripts/
 │   └── reports/
 ├── v4/                                # V4 XGBoost ML model
-│   ├── models/v4.0.0/
+│   ├── models/v4.1.0/                 # V4.1.0 R3 (current production)
 │   │   ├── model.pkl                  # Trained model
 │   │   ├── model.json                 # Model config
 │   │   └── feature_importance.csv     # Feature importance
-│   ├── data/processed/
-│   │   └── final_features.json        # Feature list
+│   ├── models/v4.0.0/                 # V4.0.0 (deprecated)
+│   ├── data/v4.1.0/
+│   │   └── final_features.json        # 22 feature list
 │   └── reports/
 ├── docs/                              # Documentation
 │   ├── FINTRX_Architecture_Overview.md
@@ -1043,7 +1214,9 @@ lead_scoring_production/
 |-------|---------|------------|
 | `ml_features.v4_prospect_features` | V4 features for all prospects | Step 1 SQL |
 | `ml_features.v4_prospect_scores` | V4 scores with percentiles | Step 2 Python |
-| `ml_features.january_2026_lead_list_v4` | Final lead list | Step 3 SQL |
+| `ml_features.january_2026_lead_list` | Final lead list | Step 3 SQL |
+| `ml_features.excluded_firms` | Pattern-based firm exclusions | Manual (see Firm Exclusions section) |
+| `ml_features.excluded_firm_crds` | CRD-based firm exclusions | Manual (see Firm Exclusions section) |
 
 ### Key Metrics Reference
 
@@ -1086,9 +1259,11 @@ lead_scoring_production/
 
 ### Step 3: Hybrid Query
 - [ ] Ran V3 + V4 hybrid query
-- [ ] Created ml_features.[month]_2026_lead_list_v4
+- [ ] Created ml_features.january_2026_lead_list
 - [ ] Lead count: ___________
 - [ ] Tier distribution validated
+- [ ] Firm exclusions verified (0 excluded firms in list)
+- [ ] Deduplication verified (0 duplicate CRDs)
 
 ### Step 4: Export
 - [ ] Final validation passed
@@ -1196,8 +1371,44 @@ If V3.3 underperforms:
 
 ---
 
+---
+
+### December 30, 2025 - Centralized Firm Exclusion System
+
+**Summary:** Migrated firm exclusions from hardcoded SQL patterns to centralized BigQuery tables.
+
+#### Key Changes
+
+1. **Created Exclusion Tables**:
+   - `ml_features.excluded_firms`: 42 pattern-based exclusions (Wirehouse, Insurance, Large IBD, etc.)
+   - `ml_features.excluded_firm_crds`: 2 CRD-based exclusions (Savvy, Ritholtz)
+
+2. **Updated Lead List SQL**:
+   - Changed from hardcoded `UNNEST([...])` to `SELECT pattern FROM ml_features.excluded_firms`
+   - Changed exclusion logic from `NOT EXISTS` to `LEFT JOIN ... WHERE ... IS NULL` (BigQuery compatibility)
+
+3. **Benefits**:
+   - Easier maintenance: Add/remove exclusions without editing SQL
+   - Audit trail: Track when exclusions were added
+   - Documentation: Reason field explains each exclusion
+   - Reusable: Same tables for future lead lists
+
+#### Files Created
+
+- `pipeline/sql/create_excluded_firms_table.sql`
+- `pipeline/sql/create_excluded_firm_crds_table.sql`
+- `pipeline/sql/manage_excluded_firms.sql`
+- `pipeline/sql/CENTRALIZED_EXCLUSIONS_SUMMARY.md`
+
+#### Files Updated
+
+- `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql`
+- `pipeline/January_2026_Lead_List_V3_V4_Hybrid.sql`
+
+---
+
 **Document Version**: 3.1 (Option C: Maximized Lead List)  
-**Last Updated**: December 2025  
+**Last Updated**: December 30, 2025  
 **Methodology**: Based on validated SGA expertise - see `Lead_Scoring_Methodology_Final.md`  
 **Maintainer**: Data Science Team  
 **Questions?**: Contact the Data Science team
