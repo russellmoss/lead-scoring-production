@@ -1,0 +1,27 @@
+{
+  "timestamp": "2025-12-26T16:30:08.119811",
+  "analysis": "V4 Upgrade Impact Analysis - REMOVAL APPLIED",
+  "decision": "REMOVED",
+  "rationale": "V4_UPGRADE tier converted at 2.6% (below 2.74% baseline). Removal increased expected conversion rate by ~0.5pp.",
+  "before_removal": {
+    "v4_upgrade_leads": 541,
+    "v4_upgrade_rate_pct": 2.6,
+    "total_leads": 2765,
+    "expected_rate_pct": 5.26
+  },
+  "after_removal": {
+    "v4_upgrade_leads": 0,
+    "standard_high_v4_backfill": 218,
+    "total_leads": 2768,
+    "expected_rate_pct": 4.61
+  },
+  "improvement": {
+    "rate_change_pp": -0.65,
+    "mql_change": -19.0
+  },
+  "v4_usage_recommendation": {
+    "for_upgrading": false,
+    "for_deprioritization": true,
+    "deprioritization_threshold": "Bottom 20% (v4_percentile < 20)"
+  }
+}

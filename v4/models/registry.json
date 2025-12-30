@@ -1,0 +1,83 @@
+{
+  "current_production": "v4.1.0",
+  "models": {
+    "v4.1.0": {
+      "version": "v4.1.0",
+      "revision": "R3",
+      "status": "production",
+      "training_date": "2025-12-30",
+      "deployed_date": "2025-12-30",
+      "model_type": "XGBoost",
+      "features": 22,
+      "removed_features": [
+        "industry_tenure_months",
+        "tenure_bucket_x_mobility",
+        "independent_ria_x_ia_rep",
+        "recent_mover_x_bleeding"
+      ],
+      "hyperparameters": {
+        "max_depth": 2,
+        "min_child_weight": 30,
+        "reg_alpha": 1.0,
+        "reg_lambda": 5.0,
+        "gamma": 0.3,
+        "learning_rate": 0.01,
+        "n_estimators": 2000,
+        "early_stopping_rounds": 150,
+        "subsample": 0.6,
+        "colsample_bytree": 0.6,
+        "base_score": 0.5,
+        "scale_pos_weight": 41.0
+      },
+      "metrics": {
+        "test_auc_roc": 0.6198,
+        "test_auc_pr": 0.0697,
+        "top_decile_lift": 2.03,
+        "bottom_20_pct_rate": 0.0140,
+        "train_test_auc_gap": 0.0746,
+        "early_stopping_iteration": 223
+      },
+      "comparison": {
+        "vs_v4.0.0": "+3.5% AUC, +34% lift",
+        "vs_v3.2": "+17% lift (2.03x vs 1.74x)"
+      },
+      "shap": {
+        "method": "KernelExplainer",
+        "top_features": [
+          "has_email",
+          "tenure_months",
+          "tenure_bucket_encoded",
+          "days_since_last_move",
+          "is_dual_registered"
+        ],
+        "new_v41_features_in_top10": 3
+      },
+      "deployment_strategy": "hybrid",
+      "use_case": "deprioritization_filter",
+      "deprioritization_threshold": 20,
+      "notes": "Feature selection (22 features) + stronger regularization. Best performing model to date. SHAP interpretability via KernelExplainer."
+    },
+    "v4.0.0": {
+      "model_version": "v4.0.0",
+      "model_type": "XGBoost",
+      "training_date": "2025-12-24T15:11:32.592253",
+      "status": "deprecated",
+      "deprecated_date": "2025-12-30",
+      "deprecated_reason": "Superseded by V4.1.0 with +3.5% AUC improvement and +34% lift improvement",
+      "deployment_strategy": "hybrid",
+      "use_case": "deprioritization_filter",
+      "test_metrics": {
+        "auc_roc": 0.5988588624111034,
+        "auc_pr": 0.04323772079970412,
+        "top_decile_lift": 1.5089087631724902,
+        "top_5pct_lift": 1.4544573643410852
+      },
+      "feature_count": 14,
+      "deprioritization_threshold": 20,
+      "bottom_20pct_conv_rate": 0.0133,
+      "top_80pct_conv_rate": 0.0366,
+      "efficiency_gain": "11.7%",
+      "notes": "V4 is deployed as deprioritization filter (skip bottom 20%) alongside V3 prioritization"
+    }
+  }
+}

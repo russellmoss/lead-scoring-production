@@ -1,0 +1,110 @@
+{
+  "timestamp": "2025-12-26T16:30:08.107320",
+  "methodology": "Tier-Weighted Bootstrap with Conservative Adjustments (OPTIMIZED)",
+  "optimization_changes": {
+    "v4_upgrade_removed": true,
+    "v4_deprioritization_applied": true,
+    "standard_high_v4_backfill": true,
+    "v4_upgrade_leads": 0,
+    "standard_high_v4_leads": 218
+  },
+  "lead_source": "Provided Lead List",
+  "total_leads": 2768,
+  "num_sgas": 14,
+  "leads_per_sga": 198.0,
+  "baseline_analysis": {
+    "historical_baseline_pct": 2.737,
+    "baseline_sample_size": 32264,
+    "baseline_conversions": 883,
+    "baseline_ci_95": [
+      2.56,
+      2.92
+    ]
+  },
+  "tier_distribution": [
+    {
+      "score_tier": "TIER_2_PROVEN_MOVER",
+      "lead_count": 1750,
+      "historical_rate": 0.05907172995780588,
+      "historical_n": 711
+    },
+    {
+      "score_tier": "TIER_1_PRIME_MOVER",
+      "lead_count": 350,
+      "historical_rate": 0.047619047619047644,
+      "historical_n": 42
+    },
+    {
+      "score_tier": "TIER_3_MODERATE_BLEEDER",
+      "lead_count": 327,
+      "historical_rate": 0.06756756756756757,
+      "historical_n": 74
+    },
+    {
+      "score_tier": "STANDARD_HIGH_V4",
+      "lead_count": 218,
+      "historical_rate": 0.036736720172099946,
+      "historical_n": 6043
+    },
+    {
+      "score_tier": "TIER_1B_PRIME_MOVER_SERIES65",
+      "lead_count": 70,
+      "historical_rate": 0.11764705882352944,
+      "historical_n": 34
+    },
+    {
+      "score_tier": "TIER_1F_HV_WEALTH_BLEEDER",
+      "lead_count": 52,
+      "historical_rate": 0.0606060606060606,
+      "historical_n": 99
+    },
+    {
+      "score_tier": "TIER_1A_PRIME_MOVER_CFP",
+      "lead_count": 1,
+      "historical_rate": 0.5,
+      "historical_n": 6
+    }
+  ],
+  "raw_estimates": {
+    "tier_weighted_mean": 5.8538,
+    "bootstrap_mean": 5.8611,
+    "bootstrap_median": 5.8136,
+    "bootstrap_std": 0.7887,
+    "bootstrap_ci_95": [
+      4.4294,
+      7.5439
+    ]
+  },
+  "adjustment_factors": {
+    "small_sample_shrinkage": 0.9,
+    "implementation_friction": 0.95,
+    "historical_overfitting": 0.92
+  },
+  "combined_adjustment": 0.7866,
+  "adjusted_estimates": {
+    "point_estimate": 4.6104,
+    "conservative_p10": 3.8505,
+    "optimistic_p90": 5.4194,
+    "ci_95": [
+      3.4842,
+      5.934
+    ]
+  },
+  "baseline_comparison": {
+    "baseline_rate": 2.737,
+    "improvement_absolute_pp": 1.8736,
+    "improvement_relative_pct": 68.46,
+    "prob_exceed_baseline": 99.98,
+    "prob_exceed_4pct": 83.96,
+    "prob_exceed_5pct": 25.3,
+    "prob_exceed_6pct": 2.02
+  },
+  "expected_conversions": {
+    "total_mqls_expected": 127.6,
+    "total_mqls_conservative": 106.6,
+    "total_mqls_optimistic": 150.0,
+    "per_sga_expected": 9.1,
+    "per_sga_conservative": 7.6,
+    "per_sga_optimistic": 10.7
+  }
+}

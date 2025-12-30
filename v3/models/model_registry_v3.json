@@ -1,0 +1,251 @@
+{
+  "model_id": "lead-scoring-v3.3.0",
+  "model_version": "V3.3.0_12302025_BLEEDING_SIGNAL_REFINEMENT",
+  "model_type": "rules-based-tiers",
+  "status": "production",
+  "created_date": "2025-12-21",
+  "updated_date": "2025-12-30",
+  "changes_from_v3.2.4": [
+    "REMOVED: TIER_5_HEAVY_BLEEDER - Analysis showed 3.27% conversion (BELOW 3.82% baseline)",
+    "UPDATED: Firm departures now use inferred approach (START_DATE at new firm) for 60-90 days fresher signal",
+    "UPDATED: TIER_3_MODERATE_BLEEDER threshold tightened from -10 to -1 → -15 to -3",
+    "ADDED: TIER_3A_ACCELERATING_BLEEDER for firms with accelerating bleeding velocity",
+    "ADDED: bleeding_velocity field (ACCELERATING/STEADY/DECELERATING) to detect firms entering bleeding phase",
+    "RATIONALE: Heavy bleeding firms have already lost best advisors; moderate bleeding with acceleration is the optimal signal",
+    "VALIDATION: Moderate bleeding converts at 5.43% (1.42x baseline) vs heavy bleeding at 3.27% (0.86x baseline)"
+  ],
+  "changes_from_v3.2.3": [
+    "Added insurance exclusions: excludes leads with 'Insurance Agent' or 'Insurance' in title or firm name",
+    "Title exclusion: Added UPPER(c.TITLE_NAME) LIKE '%INSURANCE AGENT%' OR UPPER(c.TITLE_NAME) LIKE '%INSURANCE%'",
+    "Firm name exclusion: Added '%INSURANCE%' pattern to excluded_firms CTE",
+    "Expected impact: Removes insurance agents and insurance-focused firms from lead scoring and lead lists"
+  ],
+  "changes_from_v3.2.2": [
+    "Added PRODUCING_ADVISOR = TRUE filter to exclude non-advisors (operations, compliance, support roles)",
+    "Filter applied in lead_certifications CTE to ensure only producing advisors are included",
+    "Expected impact: Removes non-advisors who don't actively manage client assets",
+    "Note: This filter is based on FINTRX's classification of advisors who actively manage a personal book of client assets"
+  ],
+  "changes_from_v3.2.1": [
+    "Added TIER_1F_HV_WEALTH_BLEEDER: High-Value Wealth title holders at bleeding firms",
+    "New tier captures advisors with ownership/seniority titles (Founder, Principal, Partner, Director, etc.) combined with 'Wealth' focus",
+    "Historical validation: 266 leads, 34 conversions, 12.78% conversion rate, 3.35x lift",
+    "Tier ranks #4 overall in performance (after 1A, 1B, 1E)",
+    "Added is_hv_wealth_title flag to output schema",
+    "Added narrative generation for TIER_1F"
+  ],
+  "changes_from_v3.2": [
+    "Added Tier 1A: CFP holders at bleeding firms (16.44% conversion, 4.3x lift)",
+    "Added Tier 1B: Series 65 only (pure RIA) meeting Tier 1 criteria (16.48% conversion, 4.3x lift)",
+    "Updated Tier 1 conversion rate from 16.00% to 13.21% (without certification boost)",
+    "Updated baseline conversion rate from 3.21% to 3.82%",
+    "Added certification detection from CONTACT_BIO and TITLE_NAME fields",
+    "Added certification flags to output (has_cfp, has_series_65_only, has_series_7, has_cfa)",
+    "Added data-driven title exclusion logic based on analysis of 72,055 historical leads",
+    "Excludes ~8.5% of leads with near-zero historical conversion rates (0-0.5%)",
+    "Key exclusions: Financial Solutions Advisor (BofA retail), First Vice President variants (wirehouse junior), Operations roles, Paraplanner/Associate Advisor (support roles), Wholesaler titles, Compliance roles",
+    "Expected impact: Improved lead quality by removing 0% conversion title categories"
+  ],
+  "changes_from_v3.1": [
+    "Added firm_rep_count signal (small firms convert 3.5x better)",
+    "Added num_prior_firms signal (3+ moves = 2.5x lift)",
+    "Tightened Tier 1 tenure from 1-4yr to 1-3yr",
+    "Split Tier 1 into 1A/1B/1C for granular prioritization",
+    "Added TIER_2A_PROVEN_MOVER for career changers",
+    "Changed bleeding criterion from != 0 to < 0"
+  ],
+  "expected_performance": {
+    "tier_1a_cfp_lift": "4.30x",
+    "tier_1b_series65_lift": "4.31x",
+    "tier_1c_small_lift": "3.46x",
+    "tier_1d_small_firm_lift": "3.66x",
+    "tier_1e_prime_mover_lift": "3.46x",
+    "tier_1f_hv_wealth_lift": "3.35x",
+    "tier_2_lift": "2.46x",
+    "tier_3a_accelerating_lift": "~1.57x",
+    "tier_3_lift": "1.42x",
+    "tier_4_lift": "3.27x"
+  },
+  "tier_definitions": {
+    "TIER_1A_PRIME_MOVER_CFP": {
+      "description": "CFP holder (book ownership signal) at bleeding firm - highest conversion potential",
+      "expected_conversion_rate": 0.1644,
+      "expected_lift": 4.30,
+      "historical_validation": {
+        "leads": 73,
+        "conversions": 12,
+        "time_period": "2022-2025 (3 years)"
+      },
+      "criteria": "1-4yr tenure, 5+yr experience, bleeding firm, CFP designation, not wirehouse"
+    },
+    "TIER_1B_PRIME_MOVER_SERIES65": {
+      "description": "Fee-only RIA (Series 65 only) meeting Prime Mover criteria - no broker-dealer ties",
+      "expected_conversion_rate": 0.1648,
+      "expected_lift": 4.31,
+      "historical_validation": {
+        "leads": 91,
+        "conversions": 15,
+        "time_period": "2022-2025 (3 years)"
+      },
+      "criteria": "Standard Tier 1 criteria + Series 65 only (no Series 7)"
+    },
+    "TIER_1_PRIME_MOVER": {
+      "description": "Mid-career advisor (1-4yr tenure, 5-15yr exp) at small/unstable firm OR very small firm (<10 reps) - without certification boost",
+      "expected_conversion_rate": 0.1321,
+      "expected_lift": 3.46
+    },
+    "TIER_1C_PRIME_MOVER_SMALL": {
+      "description": "Mid-career advisor (1-3yr tenure, 5-15yr exp) at small bleeding firm (<=50 reps)",
+      "expected_conversion_rate": 0.1321,
+      "expected_lift": 3.46
+    },
+    "TIER_1D_SMALL_FIRM": {
+      "description": "Recent joiner at very small firm (<=10 reps)",
+      "expected_conversion_rate": 0.14,
+      "expected_lift": 3.66
+    },
+    "TIER_1E_PRIME_MOVER": {
+      "description": "Mid-career advisor at bleeding firm (original Tier 1)",
+      "expected_conversion_rate": 0.1321,
+      "expected_lift": 3.46
+    },
+    "TIER_1F_HV_WEALTH_BLEEDER": {
+      "description": "High-Value Wealth title holder at bleeding firm - NEW V3.2.2",
+      "expected_conversion_rate": 0.1278,
+      "expected_lift": 3.35,
+      "historical_validation": {
+        "leads": 266,
+        "conversions": 34,
+        "time_period": "2022-2025 (3 years)"
+      },
+      "criteria": "High-Value Wealth title (Wealth Manager, Director+Wealth, Senior Wealth Advisor, Founder/Principal/Partner+Wealth, etc.) + bleeding firm",
+      "title_patterns": [
+        "Wealth Manager (not Wealth Management Advisor)",
+        "Director + Wealth",
+        "Senior VP + Wealth Advisor",
+        "Senior Wealth Advisor",
+        "Founder + Wealth",
+        "Principal + Wealth",
+        "Partner + Wealth",
+        "President + Wealth",
+        "Managing Director + Wealth"
+      ],
+      "exclusions": [
+        "Wealth Management Advisor (wirehouse)",
+        "Associate/Assistant variants"
+      ]
+    },
+    "TIER_2_PROVEN_MOVER": {
+      "description": "Has changed firms 3+ times - demonstrated willingness to move",
+      "expected_conversion_rate": 0.0900,
+      "expected_lift": 2.46
+    },
+    "TIER_3A_ACCELERATING_BLEEDER": {
+      "description": "V3.3 NEW: Firm with 3-15 departures AND accelerating velocity",
+      "expected_conversion_rate": 0.0600,
+      "expected_lift": 1.57,
+      "note": "Estimated - to be validated after deployment",
+      "criteria": "Moderate bleeding (3-15 departures) + accelerating velocity (bleeding just started)"
+    },
+    "TIER_3_MODERATE_BLEEDER": {
+      "description": "V3.3 UPDATED: Experienced advisor at firm losing 3-15 reps (was 1-10)",
+      "expected_conversion_rate": 0.0543,
+      "expected_lift": 1.42,
+      "criteria": "Firm with 3-15 departures (was 1-10), 5+ years experience"
+    },
+    "TIER_4_EXPERIENCED_MOVER": {
+      "description": "Veteran (20+ yrs) who recently moved",
+      "expected_conversion_rate": 0.1197,
+      "expected_lift": 3.27
+    },
+    "TIER_5_HEAVY_BLEEDER": {
+      "status": "REMOVED_V3.3",
+      "description": "Experienced advisor at firm in crisis (losing 16+ reps)",
+      "expected_conversion_rate": 0.0327,
+      "expected_lift": 0.86,
+      "note": "Removed in V3.3 - converts BELOW baseline. Advisors fall to STANDARD."
+    },
+    "STANDARD": {
+      "description": "All other leads",
+      "expected_conversion_rate": 0.0382,
+      "expected_lift": 1.0
+    }
+  },
+  "training_data": {
+    "start_date": "2024-02-01",
+    "end_date": "2025-07-03",
+    "total_leads": 30727,
+    "baseline_conversion": "3.82%"
+  },
+  "certification_analysis": {
+    "data_source": "CONTACT_BIO and TITLE_NAME fields from ria_contacts_current",
+    "cfp_coverage": "~8,668 advisors in CONTACT_BIO",
+    "cfa_coverage": "~10,352 advisors in CONTACT_BIO",
+    "series_65_source": "REP_LICENSES field (regulatory licenses only)",
+    "note": "Professional certifications are NOT in REP_LICENSES - only Series licenses"
+  },
+  "tables": {
+    "features": "ml_features.lead_scoring_features_pit",
+    "scores": "ml_features.lead_scores_v3",
+    "calibration": "ml_features.tier_calibration_v3"
+  },
+  "validation": {
+    "training_period": {
+      "start": "2024-02-01",
+      "end": "2025-07-03"
+    },
+    "test_period": {
+      "start": "2025-08-02",
+      "end": "2025-10-01"
+    },
+    "note": "V3.2 tier definitions need validation on training data. Update calibration table after running validation queries."
+  },
+  "title_exclusions": {
+    "enabled": true,
+    "exclusion_categories": [
+      {
+        "category": "RETAIL_BANK_ADVISOR",
+        "patterns": ["FINANCIAL SOLUTIONS ADVISOR", "FINANCIAL SOLUTION ADVISOR"],
+        "reason": "Bank of America retail bankers, 0% conversion (n=476)"
+      },
+      {
+        "category": "WIREHOUSE_JUNIOR",
+        "patterns": ["FIRST VICE PRESIDENT%"],
+        "reason": "Junior wirehouse titles (MS/UBS/Merrill), 0% conversion"
+      },
+      {
+        "category": "OPERATIONS",
+        "patterns": ["OPERATIONS MANAGER", "CHIEF OPERATING OFFICER", "DIRECTOR OF OPERATIONS"],
+        "reason": "Back office roles, 0% conversion"
+      },
+      {
+        "category": "SUPPORT_ROLES",
+        "patterns": ["PARAPLANNER", "ASSOCIATE ADVISOR", "REGISTERED ASSISTANT"],
+        "reason": "Support roles without client books, 0% conversion"
+      },
+      {
+        "category": "WHOLESALER",
+        "patterns": ["WHOLESALER", "INTERNAL SALES", "EXTERNAL SALES"],
+        "reason": "Sell to advisors not clients"
+      },
+      {
+        "category": "COMPLIANCE",
+        "patterns": ["COMPLIANCE OFFICER", "CHIEF COMPLIANCE"],
+        "reason": "Regulatory roles, 0.76% conversion (0.44x lift)"
+      },
+      {
+        "category": "WIREHOUSE_SVP",
+        "patterns": ["SENIOR VICE PRESIDENT, FINANCIAL ADVISOR", "SENIOR VICE PRESIDENT, WEALTH MANAGEMENT ADVISOR"],
+        "reason": "Wirehouse employees who cannot move book, 0.54% conversion (0.33x lift)"
+      },
+      {
+        "category": "INSURANCE",
+        "patterns": ["INSURANCE AGENT", "INSURANCE"],
+        "reason": "Insurance agents and insurance-focused roles/firms (V3.2.4 exclusion)"
+      }
+    ],
+    "estimated_exclusion_rate": "8.5%",
+    "validation_date": "2025-12-23",
+    "validation_sample_size": 72055
+  }
+}
