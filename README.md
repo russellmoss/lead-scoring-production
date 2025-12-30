@@ -799,6 +799,37 @@ V4.1.0 R3 represents a significant upgrade to our lead scoring ML model, achievi
 | **Features** | 14 | **22** | +8 new features |
 | **SHAP** | Limited | **Full KernelExplainer** | ✅ Enhanced |
 
+---
+
+## Unified Model Registry
+
+**Location**: `models/UNIFIED_MODEL_REGISTRY.json`
+
+**Purpose**: Single source of truth for all model versions (V3 and V4)
+
+**Current Production Models**:
+- **V3.3.0**: Rules-based tiered classification (prioritization)
+  - Registry: `v3/models/model_registry_v3.json`
+  - Documentation: `v3/VERSION_3_MODEL_REPORT.md`
+  - Production SQL: `v3/sql/generate_lead_list_v3.3.0.sql`
+- **V4.1.0 R3**: XGBoost ML model (deprioritization)
+  - Registry: `v4/models/registry.json`
+  - Documentation: `v4/VERSION_4_MODEL_REPORT.md`
+  - Production SQL: `v4/sql/production_scoring_v41.sql`
+  - Inference Script: `v4/inference/lead_scorer_v4.py`
+
+**Deprecated Models** (archived):
+- V4.0.0 → `archive/v4/models/v4.0.0/`
+- V4.1.0 → `archive/v4/models/v4.1.0/`
+- V4.1.0 R2 → `archive/v4/models/v4.1.0_r2/`
+
+**Documentation**:
+- Model Evolution: `MODEL_EVOLUTION_HISTORY.md`
+- V3 Report: `v3/VERSION_3_MODEL_REPORT.md`
+- V4 Report: `v4/VERSION_4_MODEL_REPORT.md`
+
+---
+
 ### Why V4.1.0 R3?
 
 **Problem with V4.0.0**: The model lacked direct bleeding signal features. It could only infer firm instability indirectly through `firm_net_change_12mo`, missing important signals like:
