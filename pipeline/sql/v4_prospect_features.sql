@@ -1,10 +1,38 @@
 -- ============================================================================
--- V4 PROSPECT FEATURES TABLE
--- Creates features for all FINTRX prospects to enable V4 scoring
--- Run monthly BEFORE lead list generation
+-- V4 PROSPECT FEATURES TABLE (UPDATED FOR V4.1.0)
+-- ============================================================================
 -- 
--- PURPOSE: Calculate V4 model features for all producing advisors in FINTRX
--- TARGET TABLE: ml_features.v4_prospect_features
+-- VERSION: V4.1.0 R3 (Updated 2025-12-30)
+-- CREATED: [Original date]
+-- UPDATED: 2025-12-30
+-- PURPOSE: Calculate all 22 V4.1 features for prospect scoring
+-- 
+-- CHANGES FROM V4.0.0:
+-- - ADDED 8 new features (bleeding signals, firm/rep type)
+-- - REMOVED 4 features (multicollinearity: r > 0.90)
+-- - Total features: 22 (was 14)
+-- 
+-- NEW FEATURES:
+-- - is_recent_mover (moved in last 12 months)
+-- - days_since_last_move (days since joining current firm)
+-- - firm_departures_corrected (corrected departure count from inferred_departures_analysis)
+-- - bleeding_velocity_encoded (0=STABLE, 1=DECELERATING, 2=STEADY, 3=ACCELERATING)
+-- - is_independent_ria (SEC registered, state notice filed)
+-- - is_ia_rep_type (IA rep type)
+-- - is_dual_registered (both broker-dealer and IA)
+-- 
+-- REMOVED FEATURES (multicollinearity):
+-- - industry_tenure_months (r=0.96 with experience_years)
+-- - tenure_bucket_x_mobility (r=0.94 with mobility_3yr)
+-- - independent_ria_x_ia_rep (r=0.97 with is_ia_rep_type)
+-- - recent_mover_x_bleeding (r=0.90 with is_recent_mover)
+-- 
+-- OUTPUT: ml_features.v4_prospect_features (SAME TABLE, updated contents)
+-- 
+-- USAGE:
+--   Run this SQL before monthly lead list generation
+--   Then run score_prospects_monthly.py to generate scores
+-- 
 -- ============================================================================
 
 CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.v4_prospect_features` AS
@@ -19,8 +47,12 @@ base_prospects AS (
         SAFE_CAST(c.PRIMARY_FIRM AS INT64) as firm_crd,
         c.PRIMARY_FIRM_NAME as firm_name,
         c.LATEST_REGISTERED_EMPLOYMENT_START_DATE as firm_start_date,
+        c.PRIMARY_FIRM_START_DATE as primary_firm_start_date,
         c.EMAIL,
         c.LINKEDIN_PROFILE_URL,
+        c.REP_TYPE,
+        c.REP_LICENSES,
+        c.PRIMARY_FIRM_CLASSIFICATION,
         CURRENT_DATE() as prediction_date
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
     WHERE c.RIA_CONTACT_CRD_ID IS NOT NULL
@@ -79,7 +111,11 @@ current_firm AS (
         COALESCE(hf.firm_crd_from_history, cs.firm_crd) as firm_crd,
         COALESCE(hf.firm_name_from_history, cs.firm_name) as firm_name,
         COALESCE(hf.firm_start_date_from_history, cs.firm_start_date) as firm_start_date,
-        COALESCE(hf.tenure_months, cs.tenure_months) as tenure_months
+        COALESCE(hf.tenure_months, cs.tenure_months) as tenure_months,
+        -- Calculate tenure_days for V4.1 feature
+        DATE_DIFF(COALESCE(hf.prediction_date, cs.prediction_date), 
+                  COALESCE(hf.firm_start_date_from_history, cs.firm_start_date), 
+                  DAY) as tenure_days
     FROM history_firm hf
     FULL OUTER JOIN current_snapshot cs
         ON hf.crd = cs.crd
@@ -245,7 +281,74 @@ data_quality AS (
 ),
 
 -- ============================================================================
--- COMBINE ALL FEATURES (matching training feature set)
+-- V4.1 NEW FEATURES: RECENT MOVER DETECTION
+-- ============================================================================
+recent_mover_features AS (
+    SELECT 
+        bp.crd,
+        bp.prediction_date,
+        -- is_recent_mover: moved in last 12 months
+        CASE 
+            WHEN cf.tenure_months IS NOT NULL AND cf.tenure_months <= 12 
+            THEN 1 ELSE 0 
+        END as is_recent_mover,
+        -- days_since_last_move: days since joining current firm
+        COALESCE(cf.tenure_days, 9999) as days_since_last_move
+    FROM base_prospects bp
+    LEFT JOIN current_firm cf ON bp.crd = cf.crd
+),
+
+-- ============================================================================
+-- V4.1 NEW FEATURES: CORRECTED FIRM BLEEDING
+-- ============================================================================
+firm_bleeding_corrected_features AS (
+    SELECT 
+        fbc.firm_crd,
+        fbc.departures_12mo_inferred as firm_departures_corrected
+    FROM `savvy-gtm-analytics.ml_features.firm_bleeding_corrected` fbc
+),
+
+-- ============================================================================
+-- V4.1 NEW FEATURES: BLEEDING VELOCITY
+-- ============================================================================
+bleeding_velocity AS (
+    SELECT 
+        bv.firm_crd,
+        bv.bleeding_velocity,
+        -- Encode velocity: 0=STABLE, 1=DECELERATING, 2=STEADY, 3=ACCELERATING
+        CASE 
+            WHEN bv.bleeding_velocity = 'ACCELERATING' THEN 3
+            WHEN bv.bleeding_velocity = 'STEADY' THEN 2
+            WHEN bv.bleeding_velocity = 'DECELERATING' THEN 1
+            ELSE 0  -- STABLE or NULL
+        END as bleeding_velocity_encoded
+    FROM `savvy-gtm-analytics.ml_features.firm_bleeding_velocity_v41` bv
+),
+
+-- ============================================================================
+-- V4.1 NEW FEATURES: FIRM/REP TYPE FEATURES
+-- ============================================================================
+firm_rep_type_features AS (
+    SELECT 
+        bp.crd,
+        -- is_independent_ria: Independent RIA flag
+        CASE 
+            WHEN bp.PRIMARY_FIRM_CLASSIFICATION LIKE '%Independent RIA%' 
+            THEN 1 ELSE 0 
+        END as is_independent_ria,
+        -- is_ia_rep_type: Pure IA rep type
+        CASE WHEN bp.REP_TYPE = 'IA' THEN 1 ELSE 0 END as is_ia_rep_type,
+        -- is_dual_registered: Dual registered (both IA and BD)
+        CASE 
+            WHEN bp.REP_TYPE = 'DR' 
+                 OR (bp.REP_LICENSES LIKE '%Series 7%' AND bp.REP_LICENSES LIKE '%Series 65%') 
+            THEN 1 ELSE 0 
+        END as is_dual_registered
+    FROM base_prospects bp
+),
+
+-- ============================================================================
+-- COMBINE ALL FEATURES (22 features for V4.1.0)
 -- ============================================================================
 all_features AS (
     SELECT
@@ -255,6 +358,7 @@ all_features AS (
         bp.prediction_date,
 
         -- GROUP 1: TENURE FEATURES
+        COALESCE(cf.tenure_months, 0) as tenure_months,
         CASE
             WHEN cf.tenure_months IS NULL THEN 'Unknown'
             WHEN cf.tenure_months < 12 THEN '0-12'
@@ -265,6 +369,7 @@ all_features AS (
         END as tenure_bucket,
 
         -- GROUP 2: EXPERIENCE FEATURES
+        COALESCE(e.experience_years, 0) as experience_years,
         CASE
             WHEN e.experience_years IS NULL OR e.experience_years = 0 THEN 'Unknown'
             WHEN e.experience_years < 5 THEN '0-5'
@@ -276,6 +381,7 @@ all_features AS (
         e.is_experience_missing,
 
         -- GROUP 3: MOBILITY FEATURES
+        COALESCE(m.mobility_3yr, 0) as mobility_3yr,
         CASE
             WHEN COALESCE(m.mobility_3yr, 0) = 0 THEN 'Stable'
             WHEN COALESCE(m.mobility_3yr, 0) = 1 THEN 'Low_Mobility'
@@ -316,8 +422,41 @@ all_features AS (
             THEN 1 ELSE 0
         END as short_tenure_x_high_mobility,
 
+        -- ====================================================================
+        -- NEW V4.1 FEATURES (16-22)
+        -- ====================================================================
+        
+        -- FEATURE 16: is_recent_mover (NEW in V4.1)
+        -- Moved firms in last 12 months
+        COALESCE(rm.is_recent_mover, 0) as is_recent_mover,
+        
+        -- FEATURE 17: days_since_last_move (NEW in V4.1)
+        -- Days since joining current firm
+        COALESCE(rm.days_since_last_move, 9999) as days_since_last_move,
+        
+        -- FEATURE 18: firm_departures_corrected (NEW in V4.1)
+        -- Corrected firm departure count from inferred_departures_analysis
+        COALESCE(fbc.firm_departures_corrected, 0) as firm_departures_corrected,
+        
+        -- FEATURE 19: bleeding_velocity_encoded (NEW in V4.1)
+        -- Firm bleeding acceleration: 0=STABLE, 1=DECELERATING, 2=STEADY, 3=ACCELERATING
+        COALESCE(bv.bleeding_velocity_encoded, 0) as bleeding_velocity_encoded,
+        
+        -- FEATURE 20: is_independent_ria (NEW in V4.1)
+        -- Independent RIA flag
+        COALESCE(frt.is_independent_ria, 0) as is_independent_ria,
+        
+        -- FEATURE 21: is_ia_rep_type (NEW in V4.1)
+        -- Investment Advisor rep type
+        COALESCE(frt.is_ia_rep_type, 0) as is_ia_rep_type,
+        
+        -- FEATURE 22: is_dual_registered (NEW in V4.1)
+        -- Both broker-dealer and investment advisor
+        COALESCE(frt.is_dual_registered, 0) as is_dual_registered,
+
         -- Metadata
-        CURRENT_TIMESTAMP() as created_at
+        CURRENT_TIMESTAMP() as created_at,
+        'v4.1.0' as feature_version
 
     FROM base_prospects bp
     LEFT JOIN current_firm cf ON bp.crd = cf.crd
@@ -328,6 +467,11 @@ all_features AS (
     LEFT JOIN broker_protocol bp_protocol ON bp.crd = bp_protocol.crd
     LEFT JOIN experience e ON bp.crd = e.crd
     LEFT JOIN data_quality dq ON bp.crd = dq.crd
+    -- NEW V4.1 JOINs:
+    LEFT JOIN recent_mover_features rm ON bp.crd = rm.crd
+    LEFT JOIN firm_bleeding_corrected_features fbc ON cf.firm_crd = fbc.firm_crd
+    LEFT JOIN bleeding_velocity bv ON cf.firm_crd = bv.firm_crd
+    LEFT JOIN firm_rep_type_features frt ON bp.crd = frt.crd
 )
 
 SELECT * FROM all_features;

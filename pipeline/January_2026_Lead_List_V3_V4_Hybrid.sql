@@ -1,16 +1,31 @@
 -- ============================================================================
--- JANUARY 2026 LEAD LIST GENERATOR (V3.2.5 + V4 UPGRADE PATH)
--- Version: 2.0 with SHAP Narratives, Job Titles, and Firm Exclusions
+-- JANUARY 2026 LEAD LIST GENERATOR (V3.2.5 + V4.1.0 R3 HYBRID)
+-- ============================================================================
+-- Version: 2.1 with V4.1.0 Integration (Updated 2025-12-30)
+-- 
+-- V4.1 INTEGRATION CHANGES:
+-- - Scores table: ml_features.v4_prospect_scores (SAME NAME, updated with V4.1 scores)
+-- - Features: 22 (was 14)
+-- - New columns: is_recent_mover, days_since_last_move, firm_departures_corrected,
+--                bleeding_velocity_encoded, is_dual_registered
+-- - Disagreement threshold: 60th percentile (was 70th) - V4.1 is more accurate
+-- 
+-- V4.1 PERFORMANCE IMPROVEMENTS:
+-- - Test AUC-ROC: 0.620 (+3.5% vs V4.0.0)
+-- - Top Decile Lift: 2.03x (+34% vs V4.0.0)
+-- - Better bleeding signal detection
 -- 
 -- FEATURES:
 -- - V3 Rules: Tier assignment with rich human-readable narratives
--- - V4 XGBoost: Upgrade path with SHAP-based narratives
+-- - V4.1 XGBoost: Upgrade path with SHAP-based narratives
 -- - Job Titles: Included in output for SDR context
 -- - Firm Exclusions: Savvy Wealth and Ritholtz excluded
 --
 -- FIRM EXCLUSIONS:
 -- - Savvy Advisors, Inc. (CRD 318493) - Internal firm
 -- - Ritholtz Wealth Management (CRD 168652) - Partner firm
+--
+-- OUTPUT: ml_features.january_2026_lead_list_v4 (SAME TABLE, updated contents)
 -- ============================================================================
 
 CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.january_2026_lead_list_v4` AS
@@ -281,11 +296,20 @@ enriched_prospects AS (
 v4_enriched AS (
     SELECT 
         ep.*,
+        -- V4.1 Score and percentile (from updated v4_prospect_scores table)
         COALESCE(v4.v4_score, 0.5) as v4_score,
         COALESCE(v4.v4_percentile, 50) as v4_percentile,
         COALESCE(v4.v4_deprioritize, FALSE) as v4_deprioritize,
         COALESCE(v4.v4_upgrade_candidate, FALSE) as v4_upgrade_candidate,
-        -- SHAP data for narrative generation
+        
+        -- NEW V4.1 Feature columns (for enhanced narratives)
+        COALESCE(v4.is_recent_mover, 0) as v4_is_recent_mover,
+        COALESCE(v4.days_since_last_move, 9999) as v4_days_since_last_move,
+        COALESCE(v4.firm_departures_corrected, 0) as v4_firm_departures_corrected,
+        COALESCE(v4.bleeding_velocity_encoded, 0) as v4_bleeding_velocity_encoded,
+        COALESCE(v4.is_dual_registered, 0) as v4_is_dual_registered,
+        
+        -- V4.1 SHAP narratives (if available)
         v4.shap_top1_feature,
         v4.shap_top1_value,
         v4.shap_top2_feature,
@@ -694,23 +718,28 @@ leads_with_sga AS (
 ),
 
 -- ============================================================================
--- R. FINAL LEAD LIST (Exclude V3/V4 disagreement leads)
+-- R. FINAL LEAD LIST (Exclude V3/V4.1 disagreement leads)
 -- ============================================================================
--- Based on investigation: Tier 1 leads with V4 < 70th percentile have 0% conversion
--- These are excluded from the final list
--- Updated threshold from 50th to 70th percentile based on Q1 2026 analysis
+-- V4.1 has better lift (2.03x vs 1.51x), so we can be more aggressive
+-- Updated threshold from 70th to 60th percentile for disagreement filtering
+-- 
+-- Logic: Tier 1 leads with V4.1 < 60th percentile are likely false positives
+-- V4.1 now has bleeding signal built-in, so it better understands V3 rules
+-- ============================================================================
 final_lead_list AS (
     SELECT 
         lws.*
     FROM leads_with_sga lws
     WHERE NOT (
+        -- V3/V4.1 Disagreement Filter
+        -- Exclude Tier 1 leads where V4.1 < 60th percentile (was 70th for V4.0)
         lws.score_tier IN (
             'TIER_1A_PRIME_MOVER_CFP',
             'TIER_1B_PRIME_MOVER_SERIES65',
             'TIER_1_PRIME_MOVER',
             'TIER_1F_HV_WEALTH_BLEEDER'
         )
-        AND lws.v4_percentile < 70
+        AND lws.v4_percentile < 60  -- CHANGED from 70 (V4.1 is more accurate)
     )
 )
 
@@ -763,8 +792,8 @@ SELECT
         ELSE 'Recyclable - 180+ days no contact'
     END as lead_source_description,
     
-    -- V4 columns
-    ROUND(v4_score, 4) as     v4_score,
+    -- V4.1 Scoring (UPDATED)
+    ROUND(v4_score, 4) as v4_score,
     v4_percentile,
     is_high_v4_standard,
     CASE 
@@ -772,15 +801,25 @@ SELECT
         WHEN score_tier != 'STANDARD_HIGH_V4' THEN 'V3 Tier Qualified'
         ELSE 'STANDARD'
     END as v4_status,
+    
+    -- V4.1 Feature Values (NEW - for transparency)
+    v4_is_recent_mover,
+    v4_days_since_last_move,
+    v4_firm_departures_corrected,
+    v4_bleeding_velocity_encoded,
+    v4_is_dual_registered,
+    
+    -- V4.1 SHAP Features (for SDR context)
     shap_top1_feature,
     shap_top2_feature,
     shap_top3_feature,
     
-    -- SGA ASSIGNMENT (NEW!)
+    -- SGA ASSIGNMENT
     sga_owner,
     sga_id,
     
     overall_rank as list_rank,
+    'v3.2.5_v4.1.0_r3' as model_version,
     CURRENT_TIMESTAMP() as generated_at
 
 FROM final_lead_list

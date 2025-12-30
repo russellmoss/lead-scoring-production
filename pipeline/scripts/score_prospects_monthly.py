@@ -1,12 +1,18 @@
 """
-Score all prospects with V4 model and generate SHAP-based narratives.
+Score all prospects with V4.1.0 model and generate SHAP-based narratives.
 Run monthly BEFORE lead list generation.
 
-UPDATED: 
-- Includes SHAP narrative generation for V4 upgraded leads
-- Extracts top 3 SHAP features per prospect
+VERSION: V4.1.0 R3
+UPDATED: 2025-12-30
 
-Working Directory: Lead_List_Generation
+CHANGES FROM V4.0.0:
+- Model upgraded to V4.1.0 R3 (0.620 AUC, 2.03x lift)
+- Features increased from 14 to 22
+- Added bleeding signal features
+- Added firm/rep type features
+- Improved SHAP interpretability
+
+Working Directory: pipeline
 Usage: python scripts/score_prospects_monthly.py
 """
 
@@ -119,6 +125,42 @@ FEATURE_DESCRIPTIONS = {
         'name': 'Short Tenure + High Mobility',
         'positive': 'new to current firm AND history of moves - very likely to move again',
         'negative': 'does not have short tenure + mobility combination'
+    },
+    # NEW V4.1 FEATURES:
+    'is_recent_mover': {
+        'name': 'Recent Mover',
+        'positive': 'moved to their current firm in the last 12 months, indicating high mobility',
+        'negative': 'been at their current firm for over a year'
+    },
+    'days_since_last_move': {
+        'name': 'Days Since Last Move',
+        'positive': 'recently joined their current firm, still in transition period',
+        'negative': 'been at their firm for a longer time'
+    },
+    'firm_departures_corrected': {
+        'name': 'Firm Departures (Corrected)',
+        'positive': 'their firm is experiencing advisor departures, creating instability',
+        'negative': 'their firm is stable with minimal departures'
+    },
+    'bleeding_velocity_encoded': {
+        'name': 'Bleeding Velocity',
+        'positive': 'their firm\'s advisor departures are accelerating, optimal outreach window',
+        'negative': 'their firm\'s departures are stable or decelerating'
+    },
+    'is_independent_ria': {
+        'name': 'Independent RIA',
+        'positive': 'at an independent RIA firm, more autonomy and portability',
+        'negative': 'not at an independent RIA'
+    },
+    'is_ia_rep_type': {
+        'name': 'IA Rep Type',
+        'positive': 'pure investment advisor (no broker-dealer registration)',
+        'negative': 'has broker-dealer registration'
+    },
+    'is_dual_registered': {
+        'name': 'Dual Registered',
+        'positive': 'dual-registered (both IA and BD), higher mobility potential',
+        'negative': 'not dual-registered'
     }
 }
 

@@ -54,9 +54,10 @@ This repository contains a **hybrid lead scoring system** that combines:
 Before starting, ensure you have:
 
 - ✅ Access to BigQuery project: `savvy-gtm-analytics`
-- ✅ V4 model files in `v4/models/v4.0.0/`:
+- ✅ V4.1.0 model files in `v4/models/v4.1.0/`:
   - `model.pkl` (trained XGBoost model)
   - `model.json` (model configuration)
+  - `final_features.json` (22 features)
 - ✅ Python environment with required packages:
   ```bash
   pip install xgboost pandas google-cloud-bigquery shap numpy
@@ -100,7 +101,7 @@ python scripts/export_lead_list.py
 │  STEP 1: Calculate V4 Features                                  │
 │     └─> SQL: v4_prospect_features.sql                           │
 │     └─> Output: ml_features.v4_prospect_features                │
-│     └─> Purpose: Calculate 14 ML features for all prospects      │
+│     └─> Purpose: Calculate 22 ML features for all prospects (V4.1.0) │
 │                                                                  │
 │  STEP 2: Score Prospects with V4 Model                         │
 │     └─> Python: score_prospects_monthly.py                      │
@@ -148,7 +149,7 @@ Salesforce Import File
 
 ### Step 1: Calculate V4 Features for All Prospects
 
-**Purpose**: Calculate the 14 features required by the V4 XGBoost model for all producing advisors in FINTRX.
+**Purpose**: Calculate the 22 features required by the V4.1.0 XGBoost model for all producing advisors in FINTRX.
 
 **File**: `pipeline/sql/v4_prospect_features.sql`
 
@@ -189,8 +190,8 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_features`;
 **File**: `pipeline/scripts/score_prospects_monthly.py`
 
 **What It Does**:
-1. Loads V4 XGBoost model from `v4/models/v4.0.0/model.pkl`
-2. Fetches features from `ml_features.v4_prospect_features`
+1. Loads V4.1.0 XGBoost model from `v4/models/v4.1.0/model.pkl`
+2. Fetches features from `ml_features.v4_prospect_features` (22 features)
 3. Generates predictions (0-1 probability scores)
 4. Calculates percentile ranks (1-100)
 5. Identifies deprioritize candidates (bottom 20%)
@@ -635,6 +636,172 @@ Based on XGBoost feature importance (gain-based):
 5. **Tenure matters** (tenure_bucket: 143.16)
    - 1-4 years tenure is the "sweet spot" for mobility
    - Too new (<1yr) or too established (>4yr) are less likely to move
+
+---
+
+## V4.1.0 R3 Model - Production (Deployed 2025-12-30)
+
+### Executive Summary
+
+V4.1.0 R3 represents a significant upgrade to our lead scoring ML model, achieving:
+
+| Metric | V4.0.0 (Previous) | V4.1.0 R3 (Current) | Improvement |
+|--------|-------------------|---------------------|-------------|
+| **Test AUC-ROC** | 0.599 | **0.620** | **+3.5%** |
+| **Top Decile Lift** | 1.51x | **2.03x** | **+34.4%** |
+| **Test AUC-PR** | 0.043 | **0.070** | **+62.8%** |
+| **Features** | 14 | **22** | +8 new features |
+| **SHAP** | Limited | **Full KernelExplainer** | ✅ Enhanced |
+
+### Why V4.1.0 R3?
+
+**Problem with V4.0.0**: The model lacked direct bleeding signal features. It could only infer firm instability indirectly through `firm_net_change_12mo`, missing important signals like:
+- How recently an advisor moved
+- The velocity of firm departures (accelerating vs. decelerating)
+- Whether advisors are dual-registered (more mobile)
+
+**V4.1.0 Solution**: Added 8 new features capturing:
+1. **Bleeding signals**: `is_recent_mover`, `days_since_last_move`, `firm_departures_corrected`, `bleeding_velocity_encoded`
+2. **Firm/rep type**: `is_independent_ria`, `is_ia_rep_type`, `is_dual_registered`
+
+### Feature List (22 Features)
+
+#### Original Features (15 retained from V4.0.0)
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | `tenure_months` | Months at current firm |
+| 2 | `tenure_bucket_encoded` | Tenure category (0-5 scale) |
+| 3 | `experience_years` | Total industry experience |
+| 4 | `mobility_3yr` | Firm moves in last 3 years |
+| 5 | `mobility_tier_encoded` | Mobility category (0-3 scale) |
+| 6 | `firm_rep_count_at_contact` | Firm headcount |
+| 7 | `firm_net_change_12mo` | Firm's net advisor change |
+| 8 | `firm_stability_tier_encoded` | Firm bleeding category |
+| 9 | `is_wirehouse` | Major wirehouse flag |
+| 10 | `is_broker_protocol` | Broker Protocol participant |
+| 11 | `has_email` | Email available |
+| 12 | `has_linkedin` | LinkedIn available |
+| 13 | `has_firm_data` | Firm data quality |
+| 14 | `mobility_x_heavy_bleeding` | Interaction: mobile + bleeding firm |
+| 15 | `short_tenure_x_high_mobility` | Interaction: short tenure + mobile |
+
+#### New V4.1 Features (7 added)
+| # | Feature | Description | Signal |
+|---|---------|-------------|--------|
+| 16 | `is_recent_mover` | Moved in last 12 months | High mobility indicator |
+| 17 | `days_since_last_move` | Days since firm change | Recency signal |
+| 18 | `firm_departures_corrected` | Corrected departure count | Firm instability |
+| 19 | `bleeding_velocity_encoded` | 0=Stable, 3=Accelerating | Trend direction |
+| 20 | `is_independent_ria` | Independent RIA flag | Firm type signal |
+| 21 | `is_ia_rep_type` | IA rep type | Rep mobility pattern |
+| 22 | `is_dual_registered` | Broker-dealer + IA | Higher mobility potential |
+
+#### Removed Features (4 - multicollinearity)
+| Feature | Removed Because | Correlation |
+|---------|-----------------|-------------|
+| `industry_tenure_months` | Redundant with `experience_years` | r = 0.96 |
+| `tenure_bucket_x_mobility` | Redundant with `mobility_3yr` | r = 0.94 |
+| `independent_ria_x_ia_rep` | Redundant with `is_ia_rep_type` | r = 0.97 |
+| `recent_mover_x_bleeding` | Redundant with `is_recent_mover` | r = 0.90 |
+
+### Validation Results
+
+#### Test Set Performance
+```
+Test Set: 3,393 leads | 133 conversions | 3.92% conversion rate
+
+Lift by Decile:
+┌─────────┬────────────┬─────────────┬───────────┬──────────┐
+│ Decile  │ Avg Score  │ Conversions │ Conv Rate │   Lift   │
+├─────────┼────────────┼─────────────┼───────────┼──────────┤
+│ 0 (bot) │ 0.3306     │ 4           │ 0.99%     │ 0.25x    │
+│ 1       │ 0.3791     │ 5           │ 1.82%     │ 0.46x    │
+│ 2       │ 0.4015     │ 11          │ 3.24%     │ 0.83x    │
+│ 3       │ 0.4443     │ 13          │ 3.83%     │ 0.98x    │
+│ 4       │ 0.4720     │ 21          │ 6.18%     │ 1.58x    │
+│ 5       │ 0.4968     │ 10          │ 2.95%     │ 0.75x    │
+│ 6       │ 0.5196     │ 12          │ 3.54%     │ 0.90x    │
+│ 7       │ 0.5390     │ 9           │ 2.65%     │ 0.68x    │
+│ 8       │ 0.5662     │ 21          │ 6.19%     │ 1.58x    │
+│ 9 (top) │ 0.6193     │ 27          │ 7.94%     │ 2.03x ⭐ │
+└─────────┴────────────┴─────────────┴───────────┴──────────┘
+```
+
+#### Validation Gates (All Passed)
+| Gate | Criterion | Result | Status |
+|------|-----------|--------|--------|
+| G9.1 | Test AUC-ROC ≥ 0.58 | 0.620 | ✅ PASSED |
+| G9.2 | Top Decile Lift ≥ 1.4x | 2.03x | ✅ PASSED |
+| G9.3 | V4.1 AUC ≥ V4.0 AUC | 0.620 > 0.599 | ✅ PASSED |
+| G9.4 | Bottom 20% Rate < 2% | 1.40% | ✅ PASSED |
+| G8.1 | Overfitting (AUC gap < 0.15) | 0.075 | ✅ PASSED |
+
+### File Reference
+
+#### Model Files
+| File | Path | Description |
+|------|------|-------------|
+| Model (pickle) | `v4/models/v4.1.0/model.pkl` | Trained XGBoost model |
+| Model (JSON) | `v4/models/v4.1.0/model.json` | Model JSON format |
+| Features | `v4/data/v4.1.0/final_features.json` | 22 feature list |
+| Hyperparameters | `v4/models/v4.1.0/hyperparameters.json` | Training config |
+| Feature importance | `v4/models/v4.1.0/feature_importance.csv` | SHAP + XGBoost importance |
+
+#### Pipeline Files
+| File | Path | Description |
+|------|------|-------------|
+| Feature SQL | `pipeline/sql/v4_prospect_features.sql` | V4.1 feature engineering (UPDATED) |
+| Scoring script | `pipeline/scripts/score_prospects_monthly.py` | Monthly scoring (UPDATED) |
+| Lead list SQL | `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` | Hybrid query (UPDATED) |
+| Validation | Validation queries in lead list SQL | Validation queries |
+
+#### BigQuery Tables (Same Names, Updated Contents)
+| Table | Description |
+|------|-------------|
+| `ml_features.v4_prospect_features` | V4.1 features (22 features) |
+| `ml_features.v4_prospect_scores` | V4.1 scores with percentiles |
+| `ml_features.january_2026_lead_list_v4` | Final lead list with V4.1 columns |
+
+### Monthly Execution Checklist (V4.1)
+
+```markdown
+## [MONTH] 2026 Lead List Generation (V4.1)
+
+**Date**: YYYY-MM-DD
+
+### Step 1: Generate V4.1 Features
+- [ ] Run: pipeline/sql/v4_prospect_features.sql
+- [ ] Verify: ml_features.v4_prospect_features created/updated
+- [ ] Row count: __________
+- [ ] Feature count: 22
+
+### Step 2: Score Prospects
+- [ ] Run: python pipeline/scripts/score_prospects_monthly.py
+- [ ] Verify: ml_features.v4_prospect_scores created/updated
+- [ ] Row count: __________
+- [ ] Bottom 20% count: __________
+
+### Step 3: Generate Lead List
+- [ ] Run: pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql
+- [ ] Verify: ml_features.january_2026_lead_list_v4 created/updated
+- [ ] Lead count: __________
+- [ ] Tier distribution validated
+
+### Step 4: Export
+- [ ] Export to CSV
+- [ ] Upload to Salesforce
+- [ ] Notify team
+```
+
+### Changelog
+
+| Version | Date | Changes |
+|---------|------|---------|
+| V4.1.0 R3 | 2025-12-30 | Production deployment - 22 features, 0.620 AUC, 2.03x lift |
+| V4.1.0 R2 | 2025-12-30 | Added regularization - overfitting controlled |
+| V4.1.0 R1 | 2025-12-30 | Initial V4.1 training - 26 features |
+| V4.0.0 | 2025-12-15 | Original ML model - 14 features, 0.599 AUC |
+| V3.2.5 | 2025-12-01 | Rules-based tier system - production |
 
 ---
 

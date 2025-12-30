@@ -17,16 +17,21 @@
 - [x] Production model directory created (v4/models/v4.1.0/)
 - [x] Inference script updated (v4/inference/lead_scorer_v4.py)
 - [x] Feature list validated (22 features, 4 removed)
+- [x] Backtest simulation completed (+6.1% improvement, 66.1% confidence)
+- [x] Pipeline integration complete (feature table, scoring script, lead list SQL)
+- [x] Deployment preparation document created
 
 ---
 
 ## Deployment Steps
 
-### 1. BigQuery Pipeline Update
-- [ ] Update BigQuery scoring pipeline to use `v4/models/v4.1.0/model.pkl`
-- [ ] Update feature engineering SQL to use 22 features (remove 4 redundant)
-- [ ] Test scoring query on sample data
-- [ ] Verify scores match local inference results
+### 1. BigQuery Pipeline Update ✅
+- [x] Update BigQuery scoring pipeline to use `v4/models/v4.1.0/model.pkl`
+- [x] Update feature engineering SQL to use 22 features (remove 4 redundant)
+- [x] Feature table created (`ml_features.v4_prospect_features`) - 1,571,776 rows
+- [x] Monthly scoring tested successfully (1,571,776 prospects scored)
+- [ ] Execute lead list SQL for January 2026 (`pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql`)
+- [ ] Verify lead list contains V4.1 scores and features
 
 ### 2. Salesforce Integration
 - [ ] Update Salesforce integration to use V4.1.0 model
@@ -35,10 +40,12 @@
 - [ ] Verify score distribution matches expected
 
 ### 3. Parallel Scoring (Validation Period)
-- [ ] Run parallel scoring (V4.0.0 vs V4.1.0) for 1 week
-- [ ] Compare lift metrics between versions
-- [ ] Monitor conversion rates by score decile
-- [ ] Track any anomalies or regressions
+- [ ] Execute January 2026 lead list SQL
+- [ ] Monitor Week 1: Track conversion rates daily
+- [ ] Monitor Week 1: Compare V4.0.0 vs V4.1-R3 performance
+- [ ] Monitor Week 2: Full lift analysis comparison
+- [ ] Monitor Week 2: Statistical significance test
+- [ ] Document any anomalies or regressions
 
 ### 4. Production Rollout
 - [ ] Switch production scoring to V4.1.0
