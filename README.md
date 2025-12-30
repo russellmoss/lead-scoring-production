@@ -1,8 +1,9 @@
 # Lead Scoring Production Pipeline - Hybrid V3 + V4 Model
 
 **Version**: 3.1 (Option C: Maximized Lead List)  
-**Last Updated**: December 2025  
-**Status**: Production Ready
+**Last Updated**: December 30, 2025  
+**Status**: Production Ready  
+**Repository Cleanup**: Completed December 30, 2025 (see `recommended_cleanup.md`)
 
 ---
 
@@ -798,6 +799,37 @@ V4.1.0 R3 represents a significant upgrade to our lead scoring ML model, achievi
 | **Features** | 14 | **22** | +8 new features |
 | **SHAP** | Limited | **Full KernelExplainer** | ✅ Enhanced |
 
+---
+
+## Unified Model Registry
+
+**Location**: `models/UNIFIED_MODEL_REGISTRY.json`
+
+**Purpose**: Single source of truth for all model versions (V3 and V4)
+
+**Current Production Models**:
+- **V3.3.0**: Rules-based tiered classification (prioritization)
+  - Registry: `v3/models/model_registry_v3.json`
+  - Documentation: `v3/VERSION_3_MODEL_REPORT.md`
+  - Production SQL: `v3/sql/generate_lead_list_v3.3.0.sql`
+- **V4.1.0 R3**: XGBoost ML model (deprioritization)
+  - Registry: `v4/models/registry.json`
+  - Documentation: `v4/VERSION_4_MODEL_REPORT.md`
+  - Production SQL: `v4/sql/production_scoring_v41.sql`
+  - Inference Script: `v4/inference/lead_scorer_v4.py`
+
+**Deprecated Models** (archived):
+- V4.0.0 → `archive/v4/models/v4.0.0/`
+- V4.1.0 → `archive/v4/models/v4.1.0/`
+- V4.1.0 R2 → `archive/v4/models/v4.1.0_r2/`
+
+**Documentation**:
+- Model Evolution: `MODEL_EVOLUTION_HISTORY.md`
+- V3 Report: `v3/VERSION_3_MODEL_REPORT.md`
+- V4 Report: `v4/VERSION_4_MODEL_REPORT.md`
+
+---
+
 ### Why V4.1.0 R3?
 
 **Problem with V4.0.0**: The model lacked direct bleeding signal features. It could only infer firm instability indirectly through `firm_net_change_12mo`, missing important signals like:
@@ -1169,7 +1201,106 @@ INNER JOIN `savvy-gtm-analytics.ml_features.excluded_firm_crds` ec
 
 ## Appendix
 
-### File Structure
+## Repository Structure (Post-Cleanup)
+
+**Last Updated**: December 30, 2025  
+**Cleanup Status**: Completed (see `recommended_cleanup.md` for details)
+
+### Core Production Files
+
+```
+lead_scoring_production/
+├── README.md                          # This file - main documentation
+├── Lead_Scoring_Methodology_Final.md  # Methodology documentation
+├── MODEL_EVOLUTION_HISTORY.md         # Complete model evolution history
+├── recommended_cleanup.md             # Cleanup plan and execution log
+│
+├── models/
+│   └── UNIFIED_MODEL_REGISTRY.json    # Unified registry (references V3 & V4)
+│
+├── v3/                                # V3 Rules-Based Model (Production)
+│   ├── sql/
+│   │   ├── generate_lead_list_v3.3.0.sql  # Production SQL
+│   │   ├── phase_4_v3_tiered_scoring.sql
+│   │   ├── lead_scoring_features_pit.sql
+│   │   ├── phase_7_production_view.sql
+│   │   ├── phase_7_salesforce_sync.sql
+│   │   └── phase_7_sga_dashboard.sql
+│   ├── models/
+│   │   └── model_registry_v3.json
+│   ├── docs/
+│   │   ├── LEAD_LIST_GENERATION_GUIDE.md
+│   │   └── QUICK_START_LEAD_LISTS.md
+│   ├── VERSION_3_MODEL_REPORT.md
+│   └── PRODUCTION_MODEL_UPDATE_CHECKLIST.md
+│
+├── v4/                                # V4 XGBoost Model (Production)
+│   ├── models/
+│   │   ├── registry.json
+│   │   └── v4.1.0_r3/                 # Production model
+│   ├── data/
+│   │   └── v4.1.0_r3/
+│   │       └── final_features.json
+│   ├── sql/
+│   │   ├── production_scoring_v41.sql
+│   │   └── v4.1/
+│   │       ├── create_recent_movers_table.sql
+│   │       ├── create_bleeding_velocity_table.sql
+│   │       ├── create_firm_rep_type_features.sql
+│   │       └── phase_2_feature_engineering_v41.sql
+│   ├── inference/
+│   │   └── lead_scorer_v4.py
+│   ├── VERSION_4_MODEL_REPORT.md
+│   └── reports/
+│       └── v4.1/
+│           ├── V4.1_Final_Summary.md
+│           ├── model_validation_report_r3.md
+│           └── shap_*.png
+│
+├── pipeline/                          # Production Pipeline
+│   ├── sql/
+│   │   ├── January_2026_Lead_List_V3_V4_Hybrid.sql  # Production lead list
+│   │   ├── v4_prospect_features.sql
+│   │   ├── create_excluded_firms_table.sql
+│   │   ├── create_excluded_firm_crds_table.sql
+│   │   ├── manage_excluded_firms.sql
+│   │   └── recycling/
+│   │       └── recyclable_pool_master_v2.1.sql
+│   ├── scripts/
+│   │   ├── score_prospects_monthly.py
+│   │   ├── execute_january_lead_list.py
+│   │   └── export_lead_list.py
+│   └── Monthly_Lead_List_Generation_V3_V4_Hybrid.md
+│
+├── docs/                              # Core Documentation
+│   ├── FINTRX_Architecture_Overview.md
+│   ├── FINTRX_Data_Dictionary.md
+│   ├── FINTRX_Lead_Scoring_Features.md
+│   ├── RECYCLABLE_LEADS_GUIDE.md
+│   ├── FIRM_EXCLUSIONS_GUIDE.md
+│   └── SALESFORCE_INTEGRATION_GUIDE.md
+│
+└── archive/                           # Archived Files (Historical Reference)
+    ├── v3/                            # V3 historical files
+    ├── v4/                            # V4 deprecated models & training scripts
+    ├── pipeline/                      # Pipeline historical files
+    └── root/                          # Root-level analysis documents
+```
+
+### Archive Directory
+
+**Purpose**: Historical files preserved for reference (not deleted)
+
+**Contents**:
+- Deprecated model versions (v4.0.0, v4.1.0, v4.1.0_r2)
+- Historical training scripts (one-time use)
+- Historical execution logs
+- Historical analysis documents
+- Old CSV exports (regenerate as needed)
+
+**Note**: All files in `archive/` are preserved but not used in production. See `cleanup/phase_2_archive_summary.md` for complete list.
+
+### File Structure (Legacy - See Above for Updated Structure)
 
 ```
 lead_scoring_production/

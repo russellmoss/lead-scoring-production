@@ -1,0 +1,6 @@
+# Placeholder file to preserve directory in Git
+# This directory will contain:
+# - Economic indicator data (CSV, Parquet)
+# - Historical movement data
+# - Feature engineering outputs
+

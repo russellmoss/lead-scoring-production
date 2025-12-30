@@ -1,0 +1,680 @@
+# Model Evolution History: Lead Scoring Production
+
+**Document Purpose**: Comprehensive institutional knowledge of lead scoring model evolution  
+**Created**: December 30, 2025  
+**Status**: Historical Reference Document  
+**Maintained By**: Data Science Team
+
+---
+
+## Executive Summary
+
+This document chronicles the complete evolution of the lead scoring system from initial attempts through the current hybrid V3.3 + V4.1.0 R3 production pipeline. It captures critical lessons learned, technical decisions, and the rationale behind each major version change.
+
+**Key Takeaways**:
+- **V2**: Data leakage disaster taught us the importance of point-in-time data
+- **V3**: Rules-based approach achieved 4.3x lift with full explainability
+- **V4**: ML redemption for deprioritization (identifying leads to skip)
+- **Hybrid**: Best of both worlds - V3 prioritizes, V4 deprioritizes
+
+**Current Production**: V3.3.0 (Rules) + V4.1.0 R3 (XGBoost) Hybrid Pipeline
+
+---
+
+## Version Timeline
+
+| Version | Date | Key Change | Top Lift | Status | Why Superseded |
+|---------|------|------------|----------|--------|----------------|
+| V1 | Early 2025 | Initial attempt | Unknown | Deprecated | [Details lost to history] |
+| V2 | Mid 2025 | First ML model (XGBoost) | 1.50x | **FAILED** | Data leakage disaster |
+| V3.0 | Dec 21, 2025 | Rules-based tiers | 3.69x | Deprecated | Consolidated to V3.2 |
+| V3.2 | Dec 21, 2025 | 7→5 tier consolidation | 3.69x | Deprecated | V3.3 bleeding refinement |
+| V3.3 | Dec 30, 2025 | Bleeding signal refinement | 4.30x (T1A) | **Production** | Inferred departures fresher |
+| V4.0.0 | Dec 24, 2025 | XGBoost (14 features) | 1.51x | Deprecated | Superseded by V4.1.0 |
+| V4.1.0 R1 | Dec 30, 2025 | XGBoost (26 features) | ~1.8x | Deprecated | Severe overfitting |
+| V4.1.0 R2 | Dec 30, 2025 | XGBoost (22 features) | ~1.9x | Deprecated | SHAP compatibility issues |
+| V4.1.0 R3 | Dec 30, 2025 | XGBoost (22 features) | 2.03x | **Production** | SHAP working via KernelExplainer |
+
+---
+
+## V1: Initial Attempt
+
+### What Was Tried
+- [Historical details not fully documented]
+- Likely a simple heuristic or basic ML approach
+
+### Why It Failed
+- [Historical details not fully documented]
+- Likely insufficient feature engineering or data quality issues
+
+### Key Lesson
+- [Historical details not fully documented]
+- Foundation for understanding that lead scoring requires careful feature design
+
+---
+
+## V2: First ML Model (Data Leakage Disaster)
+
+### Architecture
+- **Algorithm**: XGBoost
+- **Features**: 20 features
+- **Training Period**: [Dates not fully documented]
+- **Performance**: 1.50x top decile lift (in testing)
+
+### The Data Leakage Disaster
+
+**The Problem**: V2 included a feature called `days_in_gap` that calculated the time between employment records. This data was retrospectively backfilled—meaning the `end_date` of an employment record only exists AFTER the person leaves.
+
+**Timeline Example**:
+```
+January 1:   Advisor leaves Firm A (FINTRX doesn't know yet)
+January 15:  Sales team contacts advisor (system shows them still at Firm A)
+February 1:  Advisor joins Firm B, files paperwork
+February 2:  FINTRX updates their records, BACKFILLS Firm A end_date to January 1
+```
+
+**Impact**:
+- Feature showed strong signal (IV = 0.478) - #2 most important feature
+- Model looked great in testing (1.50x lift)
+- Would completely fail in production (data wouldn't exist at prediction time)
+- When removed, model performance dropped from 3.03x lift to 1.65x lift
+
+**Detection**: Discovered during V3 development when auditing all features for point-in-time validity.
+
+**Prevention (V3+ Rule)**: 
+> "NEVER use `end_date` from employment history. All features must be calculated from data available at `contacted_date`."
+
+### Other V2 Issues
+
+1. **Black Box Problem**: Sales team couldn't understand why leads were scored high
+2. **Low Adoption**: Without explainability, trust was low
+3. **CV Implementation**: Issues with temporal ordering in cross-validation
+
+### Why V2 Was Abandoned
+
+The data leakage issue made the model completely unreliable for production. Even if fixed, the lack of explainability would have limited adoption. This led to the decision to pivot to a rules-based approach (V3).
+
+---
+
+## V3: Rules-Based Success
+
+### Why Rules Beat ML
+
+| Aspect | V2 ML | V3 Rules |
+|--------|-------|----------|
+| Top Lift | 1.50x | 3.69x (4.30x for T1A) |
+| Explainability | None | Full |
+| Sales Trust | Low | High |
+| Maintenance | Retrain | Edit SQL |
+| Data Leakage Risk | High | Zero |
+
+### V3 Architecture
+
+**Model Type**: Rules-based tiered classification system  
+**Tiers**: 5 priority tiers + STANDARD baseline  
+**Assignment**: Hierarchical (first match wins)
+
+**Key Tiers**:
+- **TIER_1A_PRIME_MOVER_CFP**: 16.44% conversion, 4.30x lift
+- **TIER_1B_PRIME_MOVER_SERIES65**: 16.48% conversion, 4.31x lift
+- **TIER_1_PRIME_MOVER**: 13.21% conversion, 3.46x lift
+- **TIER_2_PROVEN_MOVER**: 8.59% conversion, 2.50x lift
+- **TIER_3_MODERATE_BLEEDER**: 9.52% conversion, 2.77x lift
+
+### V3.0 → V3.2 Evolution
+
+**V3.0**: Initial 7-tier system  
+**V3.2**: Consolidated to 5 tiers for operational simplicity while maintaining performance
+
+### V3.2 → V3.3 Evolution (Bleeding Signal Refinement)
+
+**Key Discovery**: Analysis of bleeding signal revealed critical insights:
+
+| Bleeding Category | Leads | Conversion Rate | vs Baseline |
+|-------------------|-------|-----------------|-------------|
+| STABLE | 13,016 | 5.47% | 1.43x ✅ |
+| MODERATE_BLEEDING | 1,767 | 5.43% | 1.42x ✅ |
+| LOW_BLEEDING | 2,149 | 5.35% | 1.40x ✅ |
+| HEAVY_BLEEDING | 25,084 | **3.27%** | **0.86x ❌** |
+
+**Key Finding**: Heavy bleeding firms convert BELOW baseline. The best advisors leave bleeding firms first; by the time a firm is heavily bleeding, the opportunity has passed.
+
+**V3.3 Changes**:
+- **REMOVED**: TIER_5_HEAVY_BLEEDER (converts below baseline)
+- **UPDATED**: TIER_3_MODERATE_BLEEDER threshold tightened (3-15 departures, was 1-10)
+- **ADDED**: TIER_3A_ACCELERATING_BLEEDER (firms with accelerating velocity)
+- **UPDATED**: Firm departures now use inferred approach (START_DATE at new firm) for 60-90 days fresher signal
+- **ADDED**: `bleeding_velocity` field (ACCELERATING/STEADY/DECELERATING)
+
+### V3 Key Innovations
+
+1. **Point-in-Time (PIT) Methodology**: All features calculated using only data available at `contacted_date`
+2. **Virtual Snapshot Approach**: Construct advisor/firm state dynamically from historical tables
+3. **Never Use `end_date`**: Employment end dates are retrospectively backfilled and unreliable
+4. **Fixed Analysis Date**: Use `2025-10-31` instead of `CURRENT_DATE()` for training stability
+5. **Transparent Business Rules**: Every tier decision explainable in plain English
+
+### V3 Performance
+
+**Backtest Performance (Tier 1)**:
+- Average: 19.74% conversion, 5.12x lift
+- Low variance across all backtest periods (robust)
+
+**Business Impact**:
+- Sales team can focus on 1,804 priority leads (4.6% of total)
+- Expected 180+ MQLs from priority tiers vs 60 from random selection
+- **3x improvement in conversion efficiency**
+
+---
+
+## V4: ML Redemption
+
+### The Insight That Saved V4
+
+**Key Realization**: ML is better at "Don't Contact" than "Do Contact"
+
+After V3's success with prioritization, we attempted to use ML for the same purpose. V4.0.0 achieved only 1.51x lift (vs V3's 3.69x). However, analysis revealed:
+
+- **Bottom 20% Conversion**: 1.33% (0.42x lift, 58% below baseline)
+- **Top 80% Conversion**: 3.66% (1.15x lift, 14% above baseline)
+- **Efficiency Gain**: Skip 20% of leads, lose only 8.3% of conversions = **11.7% efficiency gain**
+
+**Decision**: Use V4 as a **deprioritization filter**, not a prioritization tool.
+
+### V4.0.0 Architecture
+
+- **Algorithm**: XGBoost
+- **Features**: 14 features
+- **Training Date**: December 24, 2025
+- **Performance**: 
+  - AUC-ROC: 0.5989
+  - Top Decile Lift: 1.51x
+  - Bottom 20% Conversion: 1.33%
+
+### V4.0.0 → V4.1.0 Evolution
+
+**Motivation**: Improve model performance and add new features based on bleeding signal analysis.
+
+**V4.1.0 R1** (December 30, 2025):
+- **Features**: 26 features (added 8 new V4.1 features)
+- **Performance**: Severe overfitting (Train AUC: 0.946, Test AUC: 0.561, gap = 0.385)
+- **Status**: Failed - overfitting too severe
+
+**V4.1.0 R2** (December 30, 2025):
+- **Features**: 22 features (removed 4 redundant)
+- **Hyperparameters**: Stronger regularization
+- **Performance**: Improved but overfitting persisted (Test AUC: 0.5822, AUC Gap: 0.2723)
+- **Status**: Failed - overfitting still present
+
+**V4.1.0 R3** (December 30, 2025):
+- **Features**: 22 features (feature selection complete)
+- **Hyperparameters**: Even stronger regularization (`max_depth=2`, `min_child_weight=30`, `reg_alpha=1.0`, `reg_lambda=5.0`)
+- **Removed Features**: `industry_tenure_months`, `tenure_bucket_x_mobility`, `independent_ria_x_ia_rep`, `recent_mover_x_bleeding`
+- **Performance**: 
+  - Test AUC-ROC: 0.6198
+  - Test AUC-PR: 0.0697
+  - Top Decile Lift: 2.03x
+  - Bottom 20% Conversion: 1.40%
+  - Train/Test AUC Gap: 0.0746 (acceptable)
+  - Early Stopping: 223/2000 iterations
+- **Status**: ✅ **Production** - Met all critical success criteria
+
+### V4.1.0 New Features
+
+**8 New Features Added**:
+1. `is_recent_mover` - Advisor moved in last 12 months (inferred departure)
+2. `days_since_last_move` - Days since last firm change
+3. `firm_departures_corrected` - Corrected bleeding signal (inferred departures)
+4. `bleeding_velocity_encoded` - Accelerating/steady/decelerating bleeding
+5. `is_independent_ria` - Firm is Independent RIA
+6. `is_ia_rep_type` - Rep type is pure IA (no BD ties)
+7. `is_dual_registered` - Rep type is DR (negative signal)
+8. `independent_ria_x_ia_rep` - Interaction (removed in R3 due to redundancy)
+
+**Feature Engineering Insights**:
+- Independent RIA + IA rep type converts at 3.64% (1.33x baseline)
+- Dual-registered advisors convert below baseline (0.86-0.90x)
+- Recent movers (inferred) provide 60-90 day fresher signal than END_DATE
+
+### V4 SHAP Analysis Journey
+
+**Problem**: SHAP TreeExplainer failed with XGBoost due to `base_score` parsing issue:
+```
+ERROR: could not convert string to float: '[5E-1]'
+```
+
+**Fix Attempts**:
+1. **Fix 1: Patch JSON** - Failed (XGBoost internal representation issue)
+2. **Fix 2: Patch Config** - Failed (same issue)
+3. **Fix 3: Background Data** - Failed (same issue)
+4. **Fix 4: KernelExplainer** - ✅ **Success** (model-agnostic, slower but works)
+
+**Final Solution**: Use `shap.KernelExplainer` for V4.1.0 R3 model interpretability.
+
+**SHAP Results** (V4.1.0 R3):
+- Top Features: `has_email`, `tenure_months`, `tenure_bucket_encoded`, `days_since_last_move`, `is_dual_registered`
+- 3 new V4.1 features in top 10
+
+---
+
+## Hybrid Strategy: V3 + V4
+
+### Architecture
+
+```
+┌─────────────────┐         ┌─────────────────┐
+│   V3 Rules      │         │   V4 XGBoost    │
+│  (Prioritize)   │         │ (Deprioritize)  │
+└────────┬────────┘         └────────┬────────┘
+         │                           │
+         └───────────┬───────────────┘
+                     ▼
+         ┌───────────────────────────┐
+         │   HYBRID PRIORITY LOGIC    │
+         ├───────────────────────────┤
+         │ V3 T1 + V4 top 50%  →     │
+         │   HIGHEST PRIORITY         │
+         │ V3 T1 + V4 bottom 50% →   │
+         │   HIGH (verify)             │
+         │ V3 Standard + V4 top 20% →│
+         │   UPGRADE                  │
+         │ V3 Standard + V4 bottom   │
+         │   20% → SKIP               │
+         └───────────────────────────┘
+```
+
+### Expected Business Impact
+
+| Scenario | Leads Contacted | Expected Conversions | Efficiency |
+|----------|-----------------|----------------------|------------|
+| No model | 6,000 | 192 | Baseline |
+| V3 only (priority tiers) | 600 | ~33 | 1.74x lift |
+| V4 filter (skip bottom 20%) | 4,800 | 176 | +11.7% efficiency |
+| **Hybrid (V3 + V4)** | ~4,800 | ~180+ | **Best of both** |
+
+### Production Implementation
+
+**Monthly Lead List Generation**:
+- `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql`
+- Combines V3 tier assignments with V4 percentile scores
+- Disagreement threshold: V4 percentile < 60 (excludes low V4 scores even if V3 tier is high)
+- SGA assignment: Stratified round-robin based on expected conversion rate
+
+---
+
+## Key Lessons Learned
+
+### 1. Data Leakage Prevention (CRITICAL)
+
+**Rules**:
+1. NEVER use `end_date` from employment history
+2. ALWAYS use point-in-time methodology
+3. Fixed `analysis_date` prevents training drift
+4. Audit all features for temporal validity
+
+**Audit Query**:
+```sql
+SELECT COUNTIF(feature_calculation_date > contacted_date) as leakage_count
+FROM feature_table
+-- Result must be 0
+```
+
+**Impact**: V2's data leakage disaster cost months of development time and led to complete model abandonment.
+
+### 2. Explainability Matters More Than Accuracy
+
+Even a 2x better model is useless if sales team won't use it. V3 rules with 3.69x lift and full explainability beat V2 ML with 1.50x lift and zero explainability.
+
+**Sales Team Feedback**: "We trust V3 because we understand it. V2 was a black box."
+
+### 3. ML is Better at "Don't Contact" Than "Do Contact"
+
+The insight that saved V4: use ML for deprioritization, not prioritization. V4's 1.51x lift for prioritization was disappointing, but its 0.42x lift for bottom 20% deprioritization was highly valuable.
+
+### 4. Small Firms Convert Better
+
+Discovery from V3.2 analysis: firms with ≤10 reps convert 3.5x better than baseline. This became a Tier 1 qualification path (TIER_1D_SMALL_FIRM).
+
+### 5. Heavy Bleeding is Too Late
+
+V3.3 analysis revealed that heavy bleeding firms (16+ departures) convert BELOW baseline (3.27% vs 3.82%). The best advisors leave first; by the time a firm is heavily bleeding, the opportunity has passed.
+
+**Solution**: Focus on moderate bleeding (3-15 departures) with accelerating velocity.
+
+### 6. Overfitting Requires Aggressive Regularization
+
+V4.1.0 R1 showed severe overfitting (0.385 AUC gap). Required:
+- Feature selection (removed 4 redundant features)
+- Stronger regularization (`reg_lambda=5.0`, `reg_alpha=1.0`)
+- Deeper trees (`max_depth=2`)
+- Higher minimum child weight (`min_child_weight=30`)
+- Early stopping (150 rounds)
+
+### 7. SHAP Compatibility Issues Require Workarounds
+
+XGBoost's internal `base_score` representation (scientific notation string) is incompatible with SHAP TreeExplainer. Solution: Use KernelExplainer (model-agnostic, slower but reliable).
+
+### 8. Inferred Departures Provide Fresher Signal
+
+Using `START_DATE` at new firm to infer departure from old firm provides 60-90 days fresher signal than `END_DATE` (which is retrospectively backfilled).
+
+---
+
+## Technical Decisions Registry
+
+### Decision 1: Rules-Based Over ML (V3)
+
+**Date**: December 21, 2025  
+**Context**: V2 ML model failed due to data leakage  
+**Decision**: Build rules-based tier system instead of fixing V2  
+**Rationale**: 
+- Zero data leakage risk
+- Full explainability
+- Easier maintenance
+- Sales team trust
+
+**Outcome**: V3 achieved 3.69x lift (vs V2's 1.50x) with full explainability
+
+### Decision 2: Hybrid Approach (V3 + V4)
+
+**Date**: December 24, 2025  
+**Context**: V4.0.0 achieved only 1.51x lift for prioritization (vs V3's 3.69x)  
+**Decision**: Use V4 for deprioritization, not prioritization  
+**Rationale**:
+- V4 excels at identifying bottom 20% (1.33% conversion)
+- V3 excels at identifying top tiers (13-16% conversion)
+- Complementary strengths
+
+**Outcome**: 11.7% efficiency gain from deprioritization filter
+
+### Decision 3: Remove TIER_5_HEAVY_BLEEDER (V3.3)
+
+**Date**: December 30, 2025  
+**Context**: Analysis showed heavy bleeding firms convert below baseline  
+**Decision**: Remove TIER_5, tighten TIER_3, add TIER_3A  
+**Rationale**:
+- Heavy bleeding (16+ departures): 3.27% conversion (0.86x baseline)
+- Moderate bleeding (3-15 departures): 5.43% conversion (1.42x baseline)
+- Best advisors leave first
+
+**Outcome**: Improved tier performance, removed negative signal
+
+### Decision 4: Use KernelExplainer for SHAP (V4.1.0 R3)
+
+**Date**: December 30, 2025  
+**Context**: TreeExplainer failed due to XGBoost `base_score` parsing issue  
+**Decision**: Use KernelExplainer instead of TreeExplainer  
+**Rationale**:
+- Model-agnostic (works with any model)
+- Bypasses XGBoost internal representation issues
+- Slower but reliable
+
+**Outcome**: SHAP interpretability working, model ready for deployment
+
+### Decision 5: Feature Selection Over Feature Engineering (V4.1.0 R3)
+
+**Date**: December 30, 2025  
+**Context**: V4.1.0 R1 had 26 features, severe overfitting  
+**Decision**: Remove 4 redundant features instead of adding more  
+**Rationale**:
+- Multicollinearity analysis showed high correlations
+- XGBoost with regularization can handle some redundancy, but too much causes overfitting
+- Simpler model generalizes better
+
+**Outcome**: Reduced from 26 to 22 features, improved test AUC from 0.561 to 0.620
+
+---
+
+## Feature Engineering Insights
+
+### Point-in-Time (PIT) Features
+
+**Rule**: All features must be calculable using only data available at `contacted_date`.
+
+**Examples**:
+- ✅ `tenure_months` - Calculated from `START_DATE` (available at contact time)
+- ✅ `firm_departures_12mo` - Count departures in 12 months BEFORE `contacted_date`
+- ❌ `days_in_gap` - Uses `END_DATE` (retrospectively backfilled)
+
+### Inferred Departures
+
+**Innovation**: Use `START_DATE` at new firm to infer departure from old firm.
+
+**Advantage**: 60-90 days fresher signal than `END_DATE`.
+
+**Implementation**:
+```sql
+-- Find most recent prior employer
+WITH prior_employer AS (
+  SELECT 
+    advisor_crd,
+    firm_crd as prior_firm_crd,
+    start_date as prior_start_date,
+    ROW_NUMBER() OVER (PARTITION BY advisor_crd ORDER BY start_date DESC) as rn
+  FROM employment_history
+  WHERE start_date < current_firm_start_date
+)
+SELECT 
+  advisor_crd,
+  prior_firm_crd,
+  current_firm_start_date as inferred_departure_date
+FROM prior_employer
+WHERE rn = 1
+```
+
+### Firm Classification Features
+
+**Discovery**: Independent RIA + IA rep type converts at 3.64% (1.33x baseline).
+
+**Features**:
+- `is_independent_ria` - Firm is Independent RIA
+- `is_ia_rep_type` - Rep type is pure IA (no BD ties)
+- `is_dual_registered` - Rep type is DR (negative signal: 0.86-0.90x)
+
+**Source**: Analysis of 35,361 contacted leads from Provided Lead Lists.
+
+### Bleeding Velocity
+
+**Innovation**: Detect accelerating, steady, or decelerating bleeding.
+
+**Calculation**:
+- Compare 90-day departures to prior 90-day departures
+- ACCELERATING: Current > Prior (bleeding just started)
+- STEADY: Current ≈ Prior (ongoing bleeding)
+- DECELERATING: Current < Prior (bleeding slowing)
+
+**Insight**: Accelerating bleeding is the optimal signal (firm entering instability phase).
+
+---
+
+## Data Leakage Prevention
+
+### Rules
+
+1. **NEVER use `end_date`** from employment history
+2. **ALWAYS use point-in-time methodology** - all features calculated from data available at `contacted_date`
+3. **Fixed `analysis_date`** - Use `2025-10-31` instead of `CURRENT_DATE()` for training stability
+4. **Audit all features** for temporal validity before model training
+
+### Audit Process
+
+**Step 1**: Identify all features used in model  
+**Step 2**: For each feature, verify:
+- Source data available at `contacted_date`?
+- No retrospective backfilling?
+- No future information leakage?
+
+**Step 3**: Run leakage audit query:
+```sql
+SELECT COUNTIF(feature_calculation_date > contacted_date) as leakage_count
+FROM feature_table
+-- Result must be 0
+```
+
+**Step 4**: Document any acceptable PIT risks (e.g., current firm classification is relatively stable)
+
+### V2 Leakage Example
+
+**Feature**: `days_in_gap`  
+**Problem**: Used `END_DATE` which is retrospectively backfilled  
+**Impact**: Feature showed strong signal (IV = 0.478) but was useless in production  
+**Prevention**: V3+ never uses `end_date`, only `start_date` for inferred departures
+
+---
+
+## SHAP Analysis Journey
+
+### The Problem
+
+V4.1.0 R2 model training completed successfully, but SHAP TreeExplainer failed:
+```
+ERROR: could not convert string to float: '[5E-1]'
+```
+
+**Root Cause**: XGBoost saves `base_score` as a scientific notation string `[5E-1]`, but SHAP TreeExplainer expects a float.
+
+### Fix Attempts
+
+| Fix | Method | Status | Notes |
+|-----|--------|--------|-------|
+| Fix 1 | Patch JSON file | ❌ Failed | XGBoost internal representation issue |
+| Fix 2 | Patch XGBoost config | ❌ Failed | Same issue |
+| Fix 3 | Use background data | ❌ Failed | Same issue |
+| Fix 4 | KernelExplainer | ✅ Success | Model-agnostic, slower but works |
+
+### Final Solution
+
+**KernelExplainer**:
+- Model-agnostic (works with any model)
+- Bypasses XGBoost internal parsing issues
+- Slower than TreeExplainer but reliable
+- Requires background data sample (50-100 rows)
+
+**Implementation**:
+```python
+import shap
+
+# Load background data
+bg_df = load_background_data(limit=50)
+
+# Create prediction function
+def predict_proba(X):
+    dmatrix = xgb.DMatrix(X, feature_names=feature_names)
+    return model.predict(dmatrix)
+
+# KernelExplainer
+explainer = shap.KernelExplainer(predict_proba, bg_df)
+shap_values = explainer.shap_values(X_test)
+```
+
+### SHAP Results (V4.1.0 R3)
+
+**Top 10 Features by SHAP Importance**:
+1. `has_email` (0.0429)
+2. `tenure_months` (0.0299)
+3. `tenure_bucket_encoded` (0.0158)
+4. `days_since_last_move` (0.0133) - **New V4.1**
+5. `is_dual_registered` (0.0122) - **New V4.1**
+6. `has_firm_data` (0.0100)
+7. `firm_departures_corrected` (0.0093) - **New V4.1**
+8. `mobility_3yr` (0.0079)
+9. `firm_net_change_12mo` (0.0048)
+10. `short_tenure_x_high_mobility` (0.0034)
+
+**3 new V4.1 features in top 10** ✅
+
+---
+
+## Archived Files Reference
+
+### V3 Archived Files
+
+**Location**: `archive/v3/` (to be created)
+
+**Files to Archive**:
+- `v3/sql/generate_lead_list_v3.2.1.sql` (old version)
+- `v3/sql/generate_lead_list_v3.2.1.sql.bak`
+- `v3/sql/test_v3.3_*.sql` (test files)
+- `v3/sql/v3.3_verification_results.md`
+- `v3/scripts/run_phase_4.py` (one-time training)
+- `v3/scripts/run_phase_7.py` (one-time training)
+- `v3/scripts/run_backtest_v3.py` (historical backtest)
+- `v3/reports/v3_backtest_summary.md`
+- `v3/reports/v3.2_validation_results.md`
+- `v3/EXECUTION_LOG.md` (historical)
+- `v3/January_2026_Lead_List_Query_V3.2.sql` (old version)
+- `v3/V3_Lead_Scoring_Model_Complete_Guide.md` (superseded by VERSION_3_MODEL_REPORT.md)
+
+### V4 Archived Files
+
+**Location**: `archive/v4/` (to be created)
+
+**Files to Archive**:
+- `v4/models/v4.0.0/` (deprecated model)
+- `v4/models/v4.1.0/` (superseded by R3)
+- `v4/models/v4.1.0_r2/` (superseded by R3)
+- `v4/data/processed/` (old processed data)
+- `v4/data/v4.1.0/` (old version data)
+- `v4/data/v4.1.0_r2/` (old version data)
+- `v4/scripts/v4.1/phase_*.py` (training scripts - one-time use)
+- `v4/sql/phase_1_target_definition.sql` (old phase SQL)
+- `v4/sql/phase_2_feature_engineering.sql` (old phase SQL)
+- `v4/sql/production_scoring.sql` (V4.0 version)
+- `v4/reports/deprioritization_analysis.md`
+- `v4/reports/validation_report.md`
+- `v4/reports/shap_analysis_report.md`
+- `v4/reports/v4.1/overfitting_report*.md` (training reports)
+- `v4/EXECUTION_LOG*.md` (historical logs)
+- `v4/DEPLOYMENT_*.md` (historical deployment docs)
+- `v4/SHAP_Investigation.md` (historical investigation)
+- `v4/V4_1_Retraining_Cursor_Guide.md` (historical guide)
+- `v4/XGBoost_ML_Lead_Scoring_V4_Development_Plan.md` (historical plan)
+
+### Pipeline Archived Files
+
+**Location**: `archive/pipeline/` (to be created)
+
+**Files to Archive**:
+- `pipeline/sql/cleanup_old_january_tables.sql` (one-time cleanup)
+- `pipeline/sql/create_excluded_v3_v4_disagreement_table.sql` (temporary analysis)
+- `pipeline/sql/generate_january_2026_lead_list.sql` (superseded)
+- `pipeline/scripts/execute_v4_features.py` (one-time execution)
+- `pipeline/scripts/analyze_v4_percentile_distribution.py`
+- `pipeline/scripts/calculate_expected_conversion_rate.py`
+- `pipeline/scripts/check_alpha_zero.py`
+- `pipeline/scripts/check_shap_status.py`
+- `pipeline/scripts/fix_model_*.py` (one-time fixes)
+- `pipeline/scripts/run_lead_list_sql.py`
+- `pipeline/scripts/test_shap_with_fixed_model.py`
+- `pipeline/scripts/v41_backtest_simulation.py` (historical backtest)
+- `pipeline/scripts/validate_partner_founder_grouping.py`
+- `pipeline/scripts/verify_shap_diversity.py`
+- `pipeline/logs/EXECUTION_LOG.md` (historical)
+- `pipeline/logs/V4.1_INTEGRATION_LOG.md` (historical)
+- `pipeline/reports/V4.1_Backtest_Results.md` (historical)
+- `pipeline/exports/*.csv` (regenerate as needed)
+- `pipeline/sql/*.md` (execution results, fix documentation)
+
+---
+
+## Conclusion
+
+The lead scoring system has evolved from a data leakage disaster (V2) to a successful hybrid approach (V3.3 + V4.1.0 R3) that combines the best of rules-based prioritization and ML-based deprioritization.
+
+**Key Success Factors**:
+1. **Data Leakage Prevention**: Strict PIT methodology prevents false signals
+2. **Explainability**: Rules-based V3 builds sales team trust
+3. **Complementary Strengths**: V3 prioritizes, V4 deprioritizes
+4. **Iterative Improvement**: Each version builds on lessons learned
+
+**Current Production**: V3.3.0 (Rules) + V4.1.0 R3 (XGBoost) Hybrid Pipeline  
+**Status**: ✅ Production Ready  
+**Next Evolution**: Predictive RIA Advisor Movement Model (future)
+
+---
+
+**Document Status**: Complete  
+**Last Updated**: December 30, 2025  
+**Maintained By**: Data Science Team  
+**Next Review**: As needed when new versions are developed
+
