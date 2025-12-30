@@ -1,0 +1,7 @@
+# Placeholder file to preserve directory in Git
+# This directory will contain:
+# - Trained model artifacts (.pkl, .json)
+# - Model configuration files
+# - Feature importance reports
+# - Validation reports
+
