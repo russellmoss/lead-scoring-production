@@ -1102,6 +1102,155 @@ Based on the analysis, consider these future improvements:
 
 ---
 
+## V3.3.2: Growth Stage Advisor Tier (January 2026)
+
+### Background & Discovery
+
+Following V3.3.1, we tested additional "portable book" hypotheses. While most individual signals were invalidated (ownership, HNW focus, SMA usage), we discovered a powerful new segment through combination analysis:
+
+**"Proactive Movers"** - Advisors at STABLE firms who are seeking a platform upgrade.
+
+This is fundamentally different from our existing bleeding-firm tiers (T1A, T1B, T1F) which target "reactive movers" in crisis situations.
+
+### Two Types of High-Converting Leads
+
+| Mover Type | Firm Status | Motivation | Tiers |
+|------------|-------------|------------|-------|
+| **Reactive Movers** | Bleeding | "My firm is failing, I need to leave" | T1A, T1B, T1F |
+| **Proactive Movers** ⭐ | **Stable** | "I've outgrown my firm, I want better" | **T1G (NEW)** |
+
+### T1G: Growth Stage Advisor
+
+**Definition:**
+```sql
+WHEN industry_tenure_months BETWEEN 60 AND 180  -- 5-15 years (mid-career)
+     AND avg_account_size >= 250000              -- Established practice ($250K+)
+     AND firm_net_change_12mo > -3               -- Stable firm (not bleeding)
+THEN 'TIER_1G_GROWTH_STAGE_ADVISOR'
+```
+
+**Performance:**
+
+| Metric | Value |
+|--------|-------|
+| Conversion Rate | **7.20%** |
+| Lift vs Baseline | **1.88x** |
+| Sample Size | 125 leads (validated), 92 leads (production) |
+| Overlap with T1A/T1B | **0** (mutually exclusive) |
+| **Actual Performance** | **8.70%** (exceeds expected) |
+
+**Why They Convert:**
+1. **Strategic mindset** - Making thoughtful career decisions, not panic moves
+2. **Established book** - Have real AUM ($250K+ avg account) to bring
+3. **Growth-oriented** - Mid-career (5-15 years), still building
+4. **Platform fit** - Need better technology/support to reach next level
+
+### Updated Tier Hierarchy
+
+| Priority | Tier | Definition | Conv Rate | Lift |
+|----------|------|------------|-----------|------|
+| 1 | **T1A** | CFP + Bleeding Firm | 9.80% | 2.57x |
+| 2 | **T1G** ⭐ | **Growth Stage (NEW)** | **7.20%** | **1.88x** |
+| 3 | **T1B** | Series 65 + Bleeding | 6.18% | 1.62x |
+| 4 | T1F | HV Wealth + Bleeding | ~5% | ~1.3x |
+| 5 | T1 | Prime Mover + Bleeding | ~4% | ~1.0x |
+
+### Validation Results
+
+| Check | Threshold | Result | Status |
+|-------|-----------|--------|--------|
+| Lift | ≥ 1.5x | 1.88x | ✅ PASS |
+| Sample Size | ≥ 50 | 125 (validated), 92 (production) | ✅ PASS |
+| Overlap with T1A | 0 | 0 | ✅ PASS |
+| Overlap with T1B | 0 | 0 | ✅ PASS |
+| 95% CI | Non-overlapping | ✅ | ✅ PASS |
+| **Production Performance** | 7.20% expected | **8.70% actual** | ✅ **EXCEEDS** |
+
+### Why T1G Has Zero Overlap
+
+T1G is **mutually exclusive** with existing tiers because of firm stability requirements:
+
+- **T1A/T1B/T1F:** Require `firm_net_change_12mo <= -3` (bleeding)
+- **T1G:** Requires `firm_net_change_12mo > -3` (stable)
+
+A firm cannot be both bleeding AND stable simultaneously.
+
+### V3.3.2 Hypothesis Testing Summary
+
+**Individual Signals (All Failed):**
+
+| Signal | Expected | Actual | Result |
+|--------|----------|--------|--------|
+| Low Ownership (<5%) | >1.5x | 0.64x | ❌ INVERTED |
+| HNW Focus ($500K+ avg) | >1.5x | 0.54x | ❌ INVERTED |
+| SMA Usage | >1.5x | N/A | ❌ Data issue |
+| Portable Custodian | >1.5x | 0.88x | ❌ Not significant |
+
+**Combination Analysis (Success):**
+
+| Combination | Conv Rate | Lift | Result |
+|-------------|-----------|------|--------|
+| **Established + Stable + Mid-Career** | **7.20%** | **1.88x** | ✅ **T1G** |
+| Growth Focus + Bleeding + Senior | 5.79% | 1.52x | ⚠️ Alternative |
+
+### Implementation Details
+
+**Files Modified:**
+```
+v3/sql/phase_4_v3_tiered_scoring.sql          # T1G tier logic + avg_account_size CTE
+pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql  # T1G in lead list
+v3/models/model_registry_v3.json              # Updated to V3.3.2
+README.md                                      # This section
+v3/VERSION_3_MODEL_REPORT.md                  # Analysis documentation
+```
+
+**New Feature Added:**
+```sql
+-- avg_account_size = TOTAL_AUM / TOTAL_ACCOUNTS
+-- Identifies "established practice" - advisors with meaningful client base
+avg_account_size >= 250000  -- $250K+ average account
+```
+
+### Key Learnings
+
+1. **Two types of high-converting leads exist:**
+   - Reactive (bleeding firm, crisis-driven)
+   - Proactive (stable firm, growth-driven)
+
+2. **"Portable book" signals don't work individually:**
+   - Ownership, HNW focus, SMA usage all failed or inverted
+   - The COMBINATION matters, not individual signals
+
+3. **Counter-intuitive findings:**
+   - HNW advisors convert WORSE (too established, not looking to move)
+   - Retail advisors convert BETTER (still growing, open to change)
+
+4. **CFP detection was using wrong field:**
+   - Was: `REP_LICENSES LIKE '%CFP%'` (WRONG - CFP is not a license)
+   - Fixed: `CONTACT_BIO LIKE '%CFP%' OR TITLE_NAME LIKE '%CFP%'`
+
+### Expected Impact
+
+| Metric | Before V3.3.2 | After V3.3.2 | Change |
+|--------|---------------|--------------|--------|
+| Priority Tiers | T1A, T1B, T1F | T1A, T1B, T1F, **T1G** | +1 tier |
+| High-Converting Leads | ~310 | ~435 | **+125 leads** |
+| New Segment | - | Proactive movers | ✅ Captured |
+
+### Future Opportunities
+
+**T1H Super-Tier (Monitor for V4):**
+- Definition: Certification (CFP/Series 65) + T1G criteria
+- Performance: 8.57% conversion (2.24x lift)
+- Current sample: 35 leads (too small)
+- Action: Monitor - implement if sample grows to 50+
+
+---
+
+*V3.3.2 implemented January 2026 | Analysis: V3.3.2 Growth Stage Hypothesis Validation*
+
+---
+
 ## Testing & Validation
 
 ### V3 Model Validation

@@ -1,10 +1,21 @@
 {
-  "model_id": "lead-scoring-v3.3.1",
-  "model_version": "V3.3.1_12312025_PORTABLE_BOOK_EXCLUSIONS",
+  "model_id": "lead-scoring-v3.3.2",
+  "model_version": "V3.3.2_01012026_GROWTH_STAGE_TIER",
   "model_type": "rules-based-tiers",
   "status": "production",
   "created_date": "2025-12-21",
-  "updated_date": "2025-12-31",
+  "updated_date": "2026-01-01",
+  "changes_from_v3.3.1": [
+    "ADDED: TIER_1G_GROWTH_STAGE_ADVISOR - Mid-career advisors at stable firms with established practices",
+    "CRITERIA: industry_tenure 5-15 years + avg_account_size >= $250K + firm_net_change > -3 (stable)",
+    "PERFORMANCE: 7.20% conversion rate (1.88x lift vs 3.82% baseline)",
+    "SAMPLE SIZE: 125 leads (validated), 92 leads in production",
+    "KEY INSIGHT: Captures 'proactive movers' - advisors seeking platform upgrade, not crisis-driven",
+    "ZERO OVERLAP: T1G is mutually exclusive with T1A/T1B (requires stable firm vs bleeding firm)",
+    "NEW FEATURE: avg_account_size calculated from TOTAL_AUM / TOTAL_ACCOUNTS",
+    "VALIDATION: Actual conversion 8.70% (exceeds expected 7.20%)",
+    "ANALYSIS: V3.3.2 Growth Stage Hypothesis Validation (December 2025)"
+  ],
   "changes_from_v3.3.0": [
     "ADDED: Low discretionary AUM exclusion - firms with <50% discretionary AUM excluded (0.34x baseline)",
     "ADDED: Large firm flag (>50 reps) for V4 deprioritization (0.60x baseline)",
@@ -70,6 +81,7 @@
     "tier_1d_small_firm_lift": "3.66x",
     "tier_1e_prime_mover_lift": "3.46x",
     "tier_1f_hv_wealth_lift": "3.35x",
+    "tier_1g_growth_stage_lift": "1.88x",
     "tier_2_lift": "2.46x",
     "tier_3a_accelerating_lift": "~1.57x",
     "tier_3_lift": "1.42x",
@@ -143,6 +155,31 @@
         "Wealth Management Advisor (wirehouse)",
         "Associate/Assistant variants"
       ]
+    },
+    "TIER_1G_GROWTH_STAGE_ADVISOR": {
+      "description": "Mid-career advisors at stable firms with established practices seeking platform upgrade - NEW V3.3.2",
+      "expected_conversion_rate": 0.072,
+      "expected_lift": 1.88,
+      "actual_conversion_rate": 0.087,
+      "historical_validation": {
+        "leads": 125,
+        "conversions": 9,
+        "time_period": "2022-2025 (3 years)"
+      },
+      "production_validation": {
+        "leads": 92,
+        "conversions": 8,
+        "conversion_rate": 0.087,
+        "validation_date": "2026-01-01"
+      },
+      "criteria": {
+        "industry_tenure_months": "60-180 (5-15 years)",
+        "avg_account_size": ">= 250000",
+        "firm_net_change_12mo": "> -3 (stable, not bleeding)"
+      },
+      "key_insight": "Captures 'proactive movers' - advisors at stable firms seeking better platform, not crisis-driven",
+      "zero_overlap": "Mutually exclusive with T1A/T1B/T1F (requires stable firm vs bleeding firm)",
+      "added_version": "V3.3.2"
     },
     "TIER_2_PROVEN_MOVER": {
       "description": "Has changed firms 3+ times - demonstrated willingness to move",

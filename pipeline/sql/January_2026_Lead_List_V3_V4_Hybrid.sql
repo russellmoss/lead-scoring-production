@@ -1,7 +1,7 @@
 -- ============================================================================
--- JANUARY 2026 LEAD LIST GENERATOR (V3.3.1 + V4.1.0 R3 HYBRID)
+-- JANUARY 2026 LEAD LIST GENERATOR (V3.3.2 + V4.1.0 R3 HYBRID)
 -- ============================================================================
--- Version: 2.2 with V3.3.1 Portable Book Exclusions (Updated 2025-12-31)
+-- Version: 2.3 with V3.3.2 Growth Stage Advisor Tier (Updated 2026-01-01)
 -- 
 -- V4.1 INTEGRATION CHANGES:
 -- - Scores table: ml_features.v4_prospect_scores (SAME NAME, updated with V4.1 scores)
@@ -271,7 +271,10 @@ enriched_prospects AS (
         -- LinkedIn
         c.LINKEDIN_PROFILE_URL as linkedin_url,
         CASE WHEN c.LINKEDIN_PROFILE_URL IS NOT NULL AND TRIM(c.LINKEDIN_PROFILE_URL) != '' THEN 1 ELSE 0 END as has_linkedin,
-        c.PRODUCING_ADVISOR as producing_advisor
+        c.PRODUCING_ADVISOR as producing_advisor,
+        -- V3.3.2: Average account size for T1G Growth Stage tier
+        COALESCE(fas.avg_account_size, 0) as avg_account_size,
+        COALESCE(fas.practice_maturity, 'UNKNOWN') as practice_maturity
         
     FROM base_prospects bp
     LEFT JOIN advisor_moves am ON bp.crd = am.crd
@@ -290,6 +293,19 @@ enriched_prospects AS (
             END as discretionary_tier
         FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
     ) fd ON bp.firm_crd = fd.firm_crd
+    -- V3.3.2: Add average account size for T1G Growth Stage tier
+    LEFT JOIN (
+        SELECT 
+            CRD_ID as firm_crd,
+            SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) as avg_account_size,
+            CASE 
+                WHEN SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) >= 250000 THEN 'ESTABLISHED'
+                WHEN SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) IS NULL THEN 'UNKNOWN'
+                ELSE 'GROWTH_STAGE'
+            END as practice_maturity
+        FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
+        WHERE TOTAL_AUM > 0 AND TOTAL_ACCOUNTS > 0
+    ) fas ON bp.firm_crd = fas.firm_crd
     WHERE COALESCE(fm.turnover_pct, 0) < 100
       -- V3.3.1: Exclude low discretionary firms (0.34x baseline)
       -- Allow NULL/Unknown - don't penalize missing data
@@ -358,6 +374,11 @@ scored_prospects AS (
                   OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
                   OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0)) THEN 'TIER_1_PRIME_MOVER'
             WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 'TIER_1F_HV_WEALTH_BLEEDER'
+            -- V3.3.2: T1G Growth Stage Advisor (Proactive Movers at Stable Firms)
+            WHEN (industry_tenure_months BETWEEN 60 AND 180 
+                  AND avg_account_size >= 250000 
+                  AND firm_net_change_12mo > -3 
+                  AND is_wirehouse = 0) THEN 'TIER_1G_GROWTH_STAGE_ADVISOR'
             WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 'TIER_2_PROVEN_MOVER'
             WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 'TIER_3_MODERATE_BLEEDER'
             -- OPTION C: TIER_4_EXPERIENCED_MOVER EXCLUDED (converts at baseline 2.74%, no value)
@@ -378,7 +399,11 @@ scored_prospects AS (
                   OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
                   OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0)) THEN 3
             WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 4
-            WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 5
+            WHEN (industry_tenure_months BETWEEN 60 AND 180 
+                  AND avg_account_size >= 250000 
+                  AND firm_net_change_12mo > -3 
+                  AND is_wirehouse = 0) THEN 5
+            WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 6
             WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 6
             -- OPTION C: TIER_4 and TIER_5 excluded (map to 99)
             WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 99  -- TIER_4 excluded
@@ -397,6 +422,10 @@ scored_prospects AS (
                   OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
                   OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0)) THEN 0.071
             WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 0.065
+            WHEN (industry_tenure_months BETWEEN 60 AND 180 
+                  AND avg_account_size >= 250000 
+                  AND firm_net_change_12mo > -3 
+                  AND is_wirehouse = 0) THEN 0.072  -- V3.3.2: 7.20% conversion
             WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 0.052
             WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 0.044
             -- OPTION C: TIER_4 and TIER_5 excluded (map to STANDARD rate)

@@ -1,8 +1,8 @@
 
 -- =============================================================================
--- LEAD SCORING V3.3.1: PORTABLE BOOK SIGNAL EXCLUSIONS
+-- LEAD SCORING V3.3.2: GROWTH STAGE ADVISOR TIER
 -- =============================================================================
--- Version: V3.3.1_12312025_PORTABLE_BOOK_EXCLUSIONS
+-- Version: V3.3.2_01012026_GROWTH_STAGE_TIER
 -- 
 -- CHANGES FROM V3.2.4:
 --   - ADDED: Low discretionary AUM exclusion (<50% discretionary = 0.34x baseline)
@@ -75,6 +75,25 @@ firm_discretionary AS (
             ELSE 'MODERATE_DISCRETIONARY'
         END as discretionary_tier
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
+),
+
+-- V3.3.2: Firm average account size for T1G Growth Stage tier
+-- Calculated as TOTAL_AUM / TOTAL_ACCOUNTS
+-- Used to identify "established practice" advisors ($250K+ avg)
+-- Source: V3.3.2 Growth Stage Hypothesis Validation (December 2025)
+firm_account_size AS (
+    SELECT 
+        CRD_ID as firm_crd,
+        TOTAL_AUM,
+        TOTAL_ACCOUNTS,
+        SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) as avg_account_size,
+        CASE 
+            WHEN SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) >= 250000 THEN 'ESTABLISHED'
+            WHEN SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) IS NULL THEN 'UNKNOWN'
+            ELSE 'GROWTH_STAGE'
+        END as practice_maturity
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
+    WHERE TOTAL_AUM > 0 AND TOTAL_ACCOUNTS > 0
 ),
 
 -- Base lead data with features
@@ -231,17 +250,22 @@ leads_with_certs AS (
         COALESCE(cert.has_series_7, 0) as has_series_7,
         COALESCE(cert.has_cfa, 0) as has_cfa,
         COALESCE(cert.is_hv_wealth_title, 0) as is_hv_wealth_title,
+        COALESCE(cert.is_excluded_title, 0) as is_excluded_title,
         -- V3.3.1: Discretionary tier and flag
         COALESCE(fd.discretionary_tier, 'UNKNOWN') as discretionary_tier,
         COALESCE(fd.discretionary_ratio, -1) as discretionary_ratio,
         CASE 
             WHEN fd.discretionary_ratio < 0.50 AND fd.discretionary_ratio IS NOT NULL 
             THEN 1 ELSE 0 
-        END as is_low_discretionary
+        END as is_low_discretionary,
+        -- V3.3.2: Average account size for T1G Growth Stage tier
+        COALESCE(fas.avg_account_size, 0) as avg_account_size,
+        COALESCE(fas.practice_maturity, 'UNKNOWN') as practice_maturity
     FROM leads_with_flags l
     INNER JOIN lead_certifications cert
         ON l.lead_id = cert.lead_id
     LEFT JOIN firm_discretionary fd ON cert.firm_crd = fd.firm_crd
+    LEFT JOIN firm_account_size fas ON cert.firm_crd = fas.firm_crd
     WHERE COALESCE(cert.is_excluded_title, 0) = 0  -- Exclude leads with excluded titles
       -- V3.3.1: Exclude low discretionary firms (0.34x baseline)
       -- Allow NULL/Unknown - don't penalize missing data
@@ -341,6 +365,32 @@ tiered_leads_base AS (
                  AND is_wirehouse = 0
             THEN 'TIER_1F_HV_WEALTH_BLEEDER'
             
+            -- ==========================================================================
+            -- TIER 1G: GROWTH STAGE ADVISOR (Proactive Movers at Stable Firms)
+            -- ==========================================================================
+            -- V3.3.2: NEW TIER - Captures "proactive movers" at stable firms
+            -- 
+            -- THEORY: These advisors have built a successful practice but hit a ceiling.
+            -- They're not in crisis (stable firm), but want a better platform to grow.
+            -- This is DIFFERENT from T1A/T1B which target crisis-driven movers.
+            --
+            -- VALIDATION:
+            -- - Conversion: 7.20% (1.88x baseline)
+            -- - Sample: 125 leads
+            -- - Zero overlap with bleeding-firm tiers (mutually exclusive)
+            --
+            -- CRITERIA:
+            -- - Mid-career (5-15 years) - Still growing, not established/complacent
+            -- - Established practice ($250K+ avg account) - Has real book to move
+            -- - Stable firm (net_change > -3) - Strategic move, not crisis
+            -- ==========================================================================
+            WHEN industry_tenure_months BETWEEN 60 AND 180  -- Mid-career (5-15 years)
+                 AND avg_account_size >= 250000              -- Established practice ($250K+)
+                 AND firm_net_change_12mo > -3               -- Stable firm (NOT bleeding)
+                 AND is_wirehouse = 0                        -- Not at wirehouse
+                 AND COALESCE(is_excluded_title, 0) = 0      -- Not excluded title
+            THEN 'TIER_1G_GROWTH_STAGE_ADVISOR'
+            
             -- ============================================================
             -- TIER 2A: PROVEN MOVERS (Expected ~10% conversion) - NEW
             -- Career movers who have changed firms 3+ times
@@ -393,6 +443,7 @@ tiered_leads AS (
             WHEN 'TIER_1D_SMALL_FIRM' THEN '🥇 Small Firm Advisor'
             WHEN 'TIER_1E_PRIME_MOVER' THEN '🥇 Prime Mover'
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN '🏆 Tier 1F: HV Wealth (Bleeding)'
+            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN '🚀 Tier 1G: Growth Stage (Stable)'
             WHEN 'TIER_2A_PROVEN_MOVER' THEN '🥈 Proven Mover'
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN '🥈 Moderate Bleeder'
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN '🥉 Experienced Mover'
@@ -408,6 +459,7 @@ tiered_leads AS (
             WHEN 'TIER_1D_SMALL_FIRM' THEN 0.14
             WHEN 'TIER_1E_PRIME_MOVER' THEN 0.1321         -- UPDATED: 13.21% (was 13%)
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 0.1278   -- NEW: 12.78% (n=266)
+            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN 0.072 -- V3.3.2: 7.20% (n=125)
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 0.10
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 0.11
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 0.10
@@ -423,6 +475,7 @@ tiered_leads AS (
             WHEN 'TIER_1D_SMALL_FIRM' THEN 3.66
             WHEN 'TIER_1E_PRIME_MOVER' THEN 3.46           -- 13.21% / 3.82%
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 3.35     -- 12.78% / 3.82%
+            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN 1.88   -- V3.3.2: 7.20% / 3.82%
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 2.5
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 2.5
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 2.5
@@ -438,7 +491,8 @@ tiered_leads AS (
             WHEN 'TIER_1D_SMALL_FIRM' THEN 4
             WHEN 'TIER_1E_PRIME_MOVER' THEN 5              -- UPDATED: Was 3, now 5
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 6        -- NEW
-            WHEN 'TIER_2A_PROVEN_MOVER' THEN 7             -- UPDATED from 6
+            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN 7     -- V3.3.2: After T1F, before T2
+            WHEN 'TIER_2A_PROVEN_MOVER' THEN 8             -- UPDATED from 7
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 8         -- UPDATED from 7
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 9         -- UPDATED from 8
             WHEN 'TIER_4_HEAVY_BLEEDER' THEN 10            -- UPDATED from 9
@@ -453,6 +507,7 @@ tiered_leads AS (
             WHEN 'TIER_1D_SMALL_FIRM' THEN 'Call immediately - highest priority'
             WHEN 'TIER_1E_PRIME_MOVER' THEN 'Call immediately - highest priority'
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN '🔥 High priority - wealth leader at unstable firm'
+            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN '🚀 High priority - proactive mover at stable firm'
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 'Priority outreach within 24 hours'
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 'Priority outreach within 24 hours'
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 'Priority follow-up this week'
@@ -468,6 +523,14 @@ tiered_leads AS (
             WHEN 'TIER_1D_SMALL_FIRM' THEN 'Recent joiner at very small firm (<10 reps) - high portability signal'
             WHEN 'TIER_1E_PRIME_MOVER' THEN 'Mid-career advisor at bleeding firm - proven high-converting segment'
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 'High-Value Wealth title holder (Wealth Manager, Director, Senior Advisor, Founder/Principal/Partner) at firm losing advisors. This combination of ownership-level title and firm instability historically converts at 12.78% (3.35x baseline). Title indicates book ownership and client relationships.'
+            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN CONCAT(
+                FirstName, ' is a GROWTH STAGE ADVISOR: ',
+                'Mid-career professional (', CAST(ROUND(industry_tenure_months/12, 0) AS STRING), ' years experience) ',
+                'with an established practice at ', Company, '. ',
+                'Firm is stable but advisor may be seeking platform upgrade. ',
+                'Proactive mover - strategic growth opportunity, not crisis-driven. ',
+                'Expected conversion: 7.20% (1.88x baseline).'
+            )
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 'Has changed firms 3+ times - demonstrated willingness to move'
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 'Experienced advisor at firm losing 1-10 reps - instability signal'
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 'Veteran (20+ yrs) who recently moved - has broken inertia'
@@ -516,7 +579,10 @@ SELECT
     discretionary_ratio,
     is_low_discretionary,
     is_large_firm,
+    -- V3.3.2: Account size for T1G Growth Stage tier
+    avg_account_size,
+    practice_maturity,
     CURRENT_TIMESTAMP() as scored_at,
-    'V3.3.1_12312025_PORTABLE_BOOK_EXCLUSIONS' as model_version
+    'V3.3.2_01012026_GROWTH_STAGE_TIER' as model_version
 FROM tiered_leads
 ORDER BY priority_rank, expected_conversion_rate DESC, contacted_date DESC

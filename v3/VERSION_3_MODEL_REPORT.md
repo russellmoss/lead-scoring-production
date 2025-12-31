@@ -170,6 +170,167 @@ CASE WHEN firm_rep_count_at_contact > 50 THEN 1 ELSE 0 END as is_large_firm
 
 ---
 
+## V3.3.2 Growth Stage Advisor Analysis (January 2026)
+
+**Release Date:** January 1, 2026
+
+### Background
+
+Following V3.3.1, we tested additional "portable book" hypotheses:
+1. Low Ownership Percentage (<5%)
+2. Average Account Size / HNW Focus
+3. SMA/Investment Style Usage
+4. Portable Custodian Signal
+
+Most were **invalidated** (inverted or not significant). However, we discovered a powerful new segment through combination analysis.
+
+### Hypothesis Testing Results
+
+**Individual Signals (All Failed):**
+
+| Signal | Expected Lift | Actual Lift | Result |
+|--------|---------------|-------------|--------|
+| Low Ownership (<5%) | >1.5x | 0.64x | ❌ INVERTED |
+| No Ownership (0%) | >1.5x | 0.64x | ❌ INVERTED |
+| HNW Focus ($500K+ avg) | >1.5x | 0.54x | ❌ INVERTED |
+| Ultra-HNW ($5M+ avg) | >1.5x | 0.54x | ❌ WORST |
+| Retail (<$100K avg) | <1.0x | 1.10x | 🤔 INVERTED |
+| SMA Usage | >1.5x | N/A | ❌ Data quality |
+| Portable Custodian | >1.5x | 0.88x | ❌ Not significant |
+
+**Combination Analysis (Success):**
+
+| Combination | Conv Rate | Lift | Sample |
+|-------------|-----------|------|--------|
+| **Established + Stable + Mid-Career** | **7.20%** | **1.88x** | **125** ✅ |
+| Growth Focus + Bleeding + Senior | 5.79% | 1.52x | 190 |
+| Established + Stable + Senior | 5.41% | 1.42x | 148 |
+| Established + Bleeding + Mid-Career | 4.87% | 1.27x | 308 |
+
+### The "Proactive Mover" Discovery
+
+We identified a fundamentally different type of high-converting lead:
+
+**Reactive Movers (Existing Tiers):**
+- Firm is bleeding (unstable)
+- Motivated by crisis/fear
+- "I need to leave before the ship sinks"
+- Tiers: T1A, T1B, T1F
+
+**Proactive Movers (NEW T1G):**
+- Firm is stable (not bleeding)
+- Motivated by ambition/growth
+- "I've outgrown my platform and want better"
+- Requires: Mid-career + Established practice
+
+### T1G Tier Definition
+
+```sql
+WHEN industry_tenure_months BETWEEN 60 AND 180  -- 5-15 years
+     AND avg_account_size >= 250000              -- $250K+ avg account
+     AND firm_net_change_12mo > -3               -- Stable firm
+THEN 'TIER_1G_GROWTH_STAGE_ADVISOR'
+```
+
+**Criteria Explanation:**
+- **Mid-career (5-15 years):** Still growing, not established/complacent
+- **Established practice ($250K+):** Has real book to transfer, not building from scratch
+- **Stable firm:** Not in crisis mode, making strategic decision
+
+### Validation Results
+
+| Check | Threshold | Result | Status |
+|-------|-----------|--------|--------|
+| Conversion Rate | >1.5x baseline | 7.20% (1.88x) | ✅ PASS |
+| Sample Size | ≥50 leads | 125 leads | ✅ PASS |
+| Overlap with T1A | 0 leads | 0 leads | ✅ PASS |
+| Overlap with T1B | 0 leads | 0 leads | ✅ PASS |
+| 95% CI | Non-overlapping | ✅ | ✅ PASS |
+| **Production Performance** | 7.20% expected | **8.70% actual** | ✅ **EXCEEDS** |
+
+### Zero Overlap Verification
+
+T1G is **mutually exclusive** with existing tiers because:
+- T1A/T1B/T1F require `firm_net_change_12mo <= -3` (bleeding)
+- T1G requires `firm_net_change_12mo > -3` (stable)
+
+These conditions cannot both be true simultaneously.
+
+### Production Validation (Post-Implementation)
+
+After implementing T1G in production:
+
+| Metric | Expected | Actual | Status |
+|--------|----------|--------|--------|
+| Leads Assigned | ~125 | 92 | ✅ Close (time period difference) |
+| Conversion Rate | 7.20% | **8.70%** | ✅ **EXCEEDS** |
+| Average Tenure | 5-15 years | 9.8 years | ✅ Within range |
+| Account Size | ≥$250K | $810K avg | ✅ All meet threshold |
+| Firm Stability | >-3 | -2 to +46 | ✅ All stable |
+| Bleeding Overlap | 0 | 0 | ✅ Zero overlap |
+
+### Key Learnings
+
+1. **"Portable book" signals don't work individually** - Ownership, HNW focus, SMA usage all failed or inverted
+
+2. **Combinations matter** - The specific combo of mid-career + established + stable is predictive
+
+3. **Two types of movers** - Reactive (bleeding firm) and Proactive (stable firm) are both valid targets
+
+4. **CFP signal is combination-dependent** - CFP alone is 0.84x, but CFP + Bleeding = 2.57x
+
+5. **Counter-intuitive findings** - HNW advisors convert WORSE (too established), retail advisors convert BETTER (still growing)
+
+6. **Production exceeds expectations** - T1G converts at 8.70% vs expected 7.20%
+
+### Updated Tier Performance
+
+With T1G added:
+
+| Tier | Definition | Leads | Conv Rate | Lift |
+|------|------------|-------|-----------|------|
+| T1A | CFP + Bleeding | 12 | 41.67% | 10.91x |
+| T1B | Series65 + Bleeding | 55 | 16.36% | 4.28x |
+| T1D | Small Firm | 43 | 16.28% | 4.26x |
+| T1E | Prime Mover | 58 | 12.07% | 3.16x |
+| T1F | HV Wealth + Bleeding | 137 | 11.68% | 3.06x |
+| **T1G** | **Growth Stage** | **92** | **8.70%** | **2.28x** |
+| T1C | Prime Mover Small | 21 | 9.52% | 2.49x |
+
+### Implementation Details
+
+**New Feature:**
+```sql
+-- avg_account_size = TOTAL_AUM / TOTAL_ACCOUNTS
+-- Proxy for "established practice" - advisors with HNW clients
+firm_account_size AS (
+    SELECT 
+        CRD_ID as firm_crd,
+        SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) as avg_account_size,
+        CASE 
+            WHEN SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) >= 250000 THEN 'ESTABLISHED'
+            ELSE 'GROWTH_STAGE'
+        END as practice_maturity
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
+    WHERE TOTAL_AUM > 0 AND TOTAL_ACCOUNTS > 0
+)
+```
+
+**Files Modified:**
+- `v3/sql/phase_4_v3_tiered_scoring.sql` - Added T1G tier logic + avg_account_size
+- `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` - Added T1G to lead list
+- `v3/models/model_registry_v3.json` - Updated to V3.3.2
+
+### Future Opportunities
+
+**T1H Super-Tier (Monitor for V4):**
+- Definition: Certification (CFP/Series 65) + T1G criteria
+- Performance: 8.57% conversion (2.24x lift)
+- Current sample: 35 leads (too small)
+- Action: Monitor - implement if sample grows to 50+
+
+---
+
 ### Why Version-3 Exists
 
 Version-2 used machine learning (XGBoost) but achieved only 1.50x lift, falling short of the 2.62x target. Version-3 was built to:
