@@ -331,6 +331,133 @@ firm_account_size AS (
 
 ---
 
+## V3.3.3 Matrix Effects Analysis (January 2026)
+
+**Release Date:** January 1, 2026
+
+### Background
+
+Following V3.3.2, we conducted a comprehensive "Matrix Effects" analysis to find interaction effects and hidden patterns. This combined two independent approaches:
+
+1. **Internal Analysis:** Credential stacking, tenure matrices, current firm tenure
+2. **External Theory:** Succession gap, platform friction, AUM sweet spot
+
+### Major Discoveries
+
+#### 1. Zero Friction Triple Combo (T1B_PRIME)
+
+**The Discovery:** When ALL transition barriers are removed AND the firm is bleeding, conversion jumps to **13.64%** - our highest-converting segment ever.
+
+| Component | Individual Lift | Combined with Others |
+|-----------|-----------------|---------------------|
+| Series 65 Only | ~1.0x | - |
+| Portable Custodian | 0.84x (NEGATIVE!) | - |
+| Small Firm (≤10) | 2.36x | - |
+| **All Three + Bleeding** | - | **3.57x** |
+
+**TRUE INTERACTION EFFECT:** The combination creates multiplicative, not additive, lift.
+
+**T1B_PRIME Criteria:**
+- Series 65 Only (no Series 7) - Pure RIA, no BD lock-in
+- Portable Custodian (Schwab/Fidelity/Pershing) - Platform continuity
+- Small Firm (≤10 reps) - No bureaucratic barriers
+- Firm Bleeding (net_change ≤ -3) - Motivation to leave
+- NO CFP credential - CFP leads go to T1A instead
+
+**Validation:**
+- Conversion: 13.64% (3.57x baseline)
+- Sample: 22 leads
+- Only 1 lead overlaps with T1A (has CFP) - minimal conflict
+
+#### 2. AUM Sweet Spot (T1G_ENHANCED)
+
+**The Discovery:** The optimal AUM range is $500K-$2M, not just $250K+.
+
+| AUM Range | Leads | Conv Rate | Lift |
+|-----------|-------|-----------|------|
+| Sweet Spot ($500K-$2M) | 66 | 9.09% | 2.38x |
+| Outside Range | 59 | 5.08% | 1.33x |
+
+**Why $500K-$2M Works:**
+- Client loyalty threshold: Accounts large enough that clients follow advisor
+- Institutional avoidance: Accounts small enough to avoid lock-in
+
+**T1G_ENHANCED Criteria:**
+- Mid-career (5-15 years)
+- AUM Sweet Spot ($500K-$2M avg account) ← REFINED
+- Stable firm (net_change > -3)
+
+**Validation:**
+- Conversion: 9.09% (2.38x baseline)
+- Sample: 66 leads
+- 79% improvement over leads outside this range
+
+### Validation Results
+
+**T1B_PRIME Overlap Analysis:**
+- Total T1B_PRIME leads: 23
+- Overlap with T1A (has CFP): 1 lead
+- Unique T1B_PRIME leads: 22
+- Conversion (unique): 13.64% (3.57x lift)
+
+**T1G_ENHANCED Subset Confirmation:**
+- T1G_ENHANCED is proper subset of T1G (confirmed)
+- 79% improvement in conversion (9.09% vs 5.08%)
+
+### Tier Priority Order (V3.3.3)
+
+```sql
+-- 1. T1B_PRIME: Zero Friction Bleeder (13.64%)
+WHEN has_series_65_only = 1 
+     AND has_portable_custodian = 1 
+     AND firm_rep_count <= 10 
+     AND firm_net_change_12mo <= -3
+     AND has_cfp = 0
+THEN 'TIER_1B_PRIME_ZERO_FRICTION'
+
+-- 2. T1A: CFP + Bleeding (10.00%)
+WHEN has_cfp = 1 AND firm_net_change_12mo <= -3
+THEN 'TIER_1A_PRIME_MOVER_CFP'
+
+-- 3. T1G_ENHANCED: Sweet Spot (9.09%)
+WHEN industry_tenure_months BETWEEN 60 AND 180
+     AND avg_account_size BETWEEN 500000 AND 2000000
+     AND firm_net_change_12mo > -3
+THEN 'TIER_1G_ENHANCED_SWEET_SPOT'
+
+-- 4. T1B: S65 + Bleeding (5.49%)
+WHEN has_series_65_only = 1 AND firm_net_change_12mo <= -3
+THEN 'TIER_1B_PRIME_MOVER_SERIES65'
+
+-- 5. T1G_REMAINDER: Outside Sweet Spot (5.08%)
+WHEN industry_tenure_months BETWEEN 60 AND 180
+     AND avg_account_size >= 250000
+     AND firm_net_change_12mo > -3
+THEN 'TIER_1G_GROWTH_STAGE'
+```
+
+### Key Learnings
+
+1. **Matrix Effects Are Real:** True interaction effects exist (A×B > A + B)
+2. **Platform Friction is a System:** Individual signals fail; combinations work
+3. **Sweet Spot is Contingent:** $500K-$2M only works with growth stage criteria
+4. **Credential Stacking Doesn't Work:** CFP + CFA doesn't outperform CFP alone
+5. **Succession Gap Deferred:** Firm age data not available
+
+### Implementation Details
+
+**New Features:**
+- `has_portable_custodian` flag (Schwab/Fidelity/Pershing detection)
+- `has_cfp` flag for T1B_PRIME exclusion (CFP leads go to T1A)
+- Refined AUM range ($500K-$2M sweet spot)
+
+**Files Modified:**
+- `v3/sql/phase_4_v3_tiered_scoring.sql` - Added T1B_PRIME, upgraded T1G
+- `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` - Updated tiers
+- `v3/models/model_registry_v3.json` - Updated to V3.3.3
+
+---
+
 ### Why Version-3 Exists
 
 Version-2 used machine learning (XGBoost) but achieved only 1.50x lift, falling short of the 2.62x target. Version-3 was built to:

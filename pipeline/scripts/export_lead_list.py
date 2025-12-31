@@ -282,8 +282,9 @@ def validate_export(df, df_excluded=None):
     
     # Check for V3/V4 disagreement leads (should be 0 in final list)
     if 'score_tier' in df.columns and 'v4_percentile' in df.columns:
-        tier1_tiers = ['TIER_1A_PRIME_MOVER_CFP', 'TIER_1B_PRIME_MOVER_SERIES65', 
-                      'TIER_1_PRIME_MOVER', 'TIER_1F_HV_WEALTH_BLEEDER']
+        tier1_tiers = ['TIER_1B_PRIME_ZERO_FRICTION', 'TIER_1A_PRIME_MOVER_CFP', 
+                      'TIER_1G_ENHANCED_SWEET_SPOT', 'TIER_1B_PRIME_MOVER_SERIES65',
+                      'TIER_1G_GROWTH_STAGE', 'TIER_1_PRIME_MOVER', 'TIER_1F_HV_WEALTH_BLEEDER']
         disagreement_count = len(df[
             df['score_tier'].isin(tier1_tiers) & 
             (df['v4_percentile'] < 70)

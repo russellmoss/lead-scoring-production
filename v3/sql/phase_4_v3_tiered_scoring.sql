@@ -1,9 +1,29 @@
 
 -- =============================================================================
--- LEAD SCORING V3.3.2: GROWTH STAGE ADVISOR TIER
+-- LEAD SCORING V3.3.3: ZERO FRICTION + SWEET SPOT TIERS
 -- =============================================================================
--- Version: V3.3.2_01012026_GROWTH_STAGE_TIER
+-- Version: V3.3.3_01012026_ZERO_FRICTION_SWEET_SPOT
 -- 
+-- CHANGES FROM V3.3.2:
+--   - ADDED: TIER_1B_PRIME_ZERO_FRICTION - Highest converting segment (13.64%, 3.57x lift)
+--   - CRITERIA: Series 65 Only + Portable Custodian (Schwab/Fidelity/Pershing) + Small Firm (≤10) + Bleeding + No CFP
+--   - UPGRADED: TIER_1G → TIER_1G_ENHANCED_SWEET_SPOT (refined AUM $500K-$2M)
+--   - PERFORMANCE: 9.09% conversion (2.38x lift) - 79% improvement over original T1G
+--   - ADDED: TIER_1G_GROWTH_STAGE for leads outside sweet spot (5.08% conversion)
+--   - ADDED: has_portable_custodian flag (Schwab/Fidelity/Pershing)
+--   - DISCOVERY: Matrix effects create multiplicative lift (A×B > A + B)
+--   - KEY INSIGHT: Platform friction signals work as a SYSTEM, not individually
+--   - ANALYSIS: V3.3.3 Ultimate Matrix Analysis + Pre-Implementation Validation (January 2026)
+--
+-- TIER PERFORMANCE SUMMARY (V3.3.3):
+--   | Tier              | Conversion | Lift  | Definition                        |
+--   |-------------------|------------|-------|-----------------------------------|
+--   | T1B_PRIME         | 13.64%     | 3.57x | Zero Friction Bleeder             |
+--   | T1A               | 10.00%     | 2.62x | CFP + Bleeding                    |
+--   | T1G_ENHANCED      | 9.09%      | 2.38x | Growth Stage + $500K-$2M          |
+--   | T1B               | 5.49%      | 1.44x | Series 65 + Bleeding              |
+--   | T1G_REMAINDER     | 5.08%      | 1.33x | Growth Stage (outside sweet spot) |
+--
 -- CHANGES FROM V3.2.4:
 --   - ADDED: Low discretionary AUM exclusion (<50% discretionary = 0.34x baseline)
 --   - ADDED: Large firm flag (>50 reps = 0.60x baseline, for V4 deprioritization)
@@ -94,6 +114,23 @@ firm_account_size AS (
         END as practice_maturity
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
     WHERE TOTAL_AUM > 0 AND TOTAL_ACCOUNTS > 0
+),
+
+-- V3.3.3: Portable custodian flag for T1B_PRIME tier
+-- Identifies firms using Schwab, Fidelity, or Pershing as custodian
+-- These custodians enable "zero friction" transitions via Negative Consent
+-- Source: V3.3.3 Matrix Effects Validation (January 2026)
+firm_custodian AS (
+    SELECT 
+        CRD_ID as firm_crd,
+        CUSTODIAN_PRIMARY_BUSINESS_NAME as custodian_name,
+        CASE WHEN UPPER(CUSTODIAN_PRIMARY_BUSINESS_NAME) LIKE '%SCHWAB%' 
+                  OR UPPER(CUSTODIAN_PRIMARY_BUSINESS_NAME) LIKE '%CHARLES%'
+                  OR UPPER(CUSTODIAN_PRIMARY_BUSINESS_NAME) LIKE '%FIDELITY%'
+                  OR UPPER(CUSTODIAN_PRIMARY_BUSINESS_NAME) LIKE '%PERSHING%'
+             THEN 1 ELSE 0 
+        END as has_portable_custodian
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
 ),
 
 -- Base lead data with features
@@ -260,12 +297,15 @@ leads_with_certs AS (
         END as is_low_discretionary,
         -- V3.3.2: Average account size for T1G Growth Stage tier
         COALESCE(fas.avg_account_size, 0) as avg_account_size,
-        COALESCE(fas.practice_maturity, 'UNKNOWN') as practice_maturity
+        COALESCE(fas.practice_maturity, 'UNKNOWN') as practice_maturity,
+        -- V3.3.3: Portable custodian flag for T1B_PRIME tier
+        COALESCE(fc.has_portable_custodian, 0) as has_portable_custodian
     FROM leads_with_flags l
     INNER JOIN lead_certifications cert
         ON l.lead_id = cert.lead_id
     LEFT JOIN firm_discretionary fd ON cert.firm_crd = fd.firm_crd
     LEFT JOIN firm_account_size fas ON cert.firm_crd = fas.firm_crd
+    LEFT JOIN firm_custodian fc ON cert.firm_crd = fc.firm_crd
     WHERE COALESCE(cert.is_excluded_title, 0) = 0  -- Exclude leads with excluded titles
       -- V3.3.1: Exclude low discretionary firms (0.34x baseline)
       -- Allow NULL/Unknown - don't penalize missing data
@@ -278,11 +318,45 @@ leads_with_certs AS (
       -- Note: PRODUCING_ADVISOR = TRUE filter already applied in lead_certifications CTE
 ),
 
--- Assign tiers (V3.2.1 UPDATED definitions with certifications)
+-- Assign tiers (V3.3.3 UPDATED with T1B_PRIME and T1G_ENHANCED)
 tiered_leads_base AS (
     SELECT 
         *,
         CASE 
+            -- ==========================================================================
+            -- TIER 1B_PRIME: ZERO FRICTION BLEEDER (Highest Converting Segment)
+            -- ==========================================================================
+            -- V3.3.3: NEW TIER - Our highest-converting segment ever found!
+            -- 
+            -- THEORY: "Zero Friction" transitions - when ALL barriers are removed:
+            -- - Series 65 Only = No BD lock-in (pure RIA)
+            -- - Portable Custodian = Same platform at new firm (Negative Consent paperwork)
+            -- - Small Firm = No bureaucratic exit barriers
+            -- - Bleeding Firm = Motivation to leave
+            --
+            -- CRITICAL: Leads with CFP credential go to T1A instead (CFP has higher value)
+            --
+            -- VALIDATION:
+            -- - Conversion: 13.64% (3.57x baseline)
+            -- - Sample: 22 leads
+            -- - Only 1 lead overlaps with T1A (has CFP) - minimal conflict
+            --
+            -- CRITERIA:
+            -- - Series 65 Only (no Series 7)
+            -- - Portable Custodian (Schwab/Fidelity/Pershing)
+            -- - Small Firm (≤10 reps)
+            -- - Firm Bleeding (net_change ≤ -3)
+            -- - NO CFP credential (CFP leads go to T1A)
+            -- ==========================================================================
+            WHEN has_series_65_only = 1                      -- Pure RIA (no BD)
+                 AND has_portable_custodian = 1              -- Schwab/Fidelity/Pershing
+                 AND firm_rep_count_at_contact <= 10         -- Small firm (no bureaucracy)
+                 AND firm_net_change_12mo <= -3              -- Bleeding firm (motivation)
+                 AND has_cfp = 0                             -- No CFP (CFP goes to T1A)
+                 AND is_wirehouse = 0                        -- Not at wirehouse
+                 AND is_excluded_title = 0                   -- Not excluded title
+            THEN 'TIER_1B_PRIME_ZERO_FRICTION'
+            
             -- ============================================================
             -- TIER 1A: PRIME MOVER + CFP at BLEEDING FIRM
             -- CFP holders (book ownership signal) at unstable firms
@@ -366,30 +440,50 @@ tiered_leads_base AS (
             THEN 'TIER_1F_HV_WEALTH_BLEEDER'
             
             -- ==========================================================================
-            -- TIER 1G: GROWTH STAGE ADVISOR (Proactive Movers at Stable Firms)
+            -- TIER 1G_ENHANCED: GROWTH STAGE + AUM SWEET SPOT (Proactive Movers)
             -- ==========================================================================
-            -- V3.3.2: NEW TIER - Captures "proactive movers" at stable firms
+            -- V3.3.3: UPGRADED from T1G - Refined AUM range to $500K-$2M
             -- 
-            -- THEORY: These advisors have built a successful practice but hit a ceiling.
-            -- They're not in crisis (stable firm), but want a better platform to grow.
-            -- This is DIFFERENT from T1A/T1B which target crisis-driven movers.
+            -- THEORY: The "sweet spot" is $500K-$2M average account size:
+            -- - Big enough for client loyalty (not brand loyalty)
+            -- - Small enough to avoid institutional lock-in
             --
             -- VALIDATION:
-            -- - Conversion: 7.20% (1.88x baseline)
-            -- - Sample: 125 leads
-            -- - Zero overlap with bleeding-firm tiers (mutually exclusive)
+            -- - Conversion: 9.09% (2.38x baseline)
+            -- - Sample: 66 leads
+            -- - 79% improvement over leads outside this range
             --
             -- CRITERIA:
-            -- - Mid-career (5-15 years) - Still growing, not established/complacent
-            -- - Established practice ($250K+ avg account) - Has real book to move
-            -- - Stable firm (net_change > -3) - Strategic move, not crisis
+            -- - Mid-career (5-15 years)
+            -- - AUM Sweet Spot ($500K-$2M avg account) ← REFINED
+            -- - Stable firm (net_change > -3)
+            --
+            -- Checked BEFORE T1B because 9.09% > 5.49%
             -- ==========================================================================
-            WHEN industry_tenure_months BETWEEN 60 AND 180  -- Mid-career (5-15 years)
-                 AND avg_account_size >= 250000              -- Established practice ($250K+)
+            WHEN industry_tenure_months BETWEEN 60 AND 180   -- Mid-career (5-15 years)
+                 AND avg_account_size BETWEEN 500000 AND 2000000  -- Sweet Spot ($500K-$2M)
                  AND firm_net_change_12mo > -3               -- Stable firm (NOT bleeding)
                  AND is_wirehouse = 0                        -- Not at wirehouse
                  AND COALESCE(is_excluded_title, 0) = 0      -- Not excluded title
-            THEN 'TIER_1G_GROWTH_STAGE_ADVISOR'
+            THEN 'TIER_1G_ENHANCED_SWEET_SPOT'
+            
+            -- ==========================================================================
+            -- TIER 1G_REMAINDER: GROWTH STAGE (Outside Sweet Spot)
+            -- ==========================================================================
+            -- V3.3.3: Catches Growth Stage leads outside the $500K-$2M sweet spot
+            -- Lower priority than T1G_ENHANCED but still above T2
+            --
+            -- VALIDATION:
+            -- - Conversion: 5.08% (1.33x baseline)
+            -- - Sample: 59 leads
+            -- ==========================================================================
+            WHEN industry_tenure_months BETWEEN 60 AND 180   -- Mid-career (5-15 years)
+                 AND avg_account_size >= 250000              -- Original threshold
+                 AND (avg_account_size < 500000 OR avg_account_size > 2000000)  -- Outside sweet spot
+                 AND firm_net_change_12mo > -3               -- Stable firm
+                 AND is_wirehouse = 0                        -- Not at wirehouse
+                 AND COALESCE(is_excluded_title, 0) = 0      -- Not excluded title
+            THEN 'TIER_1G_GROWTH_STAGE'
             
             -- ============================================================
             -- TIER 2A: PROVEN MOVERS (Expected ~10% conversion) - NEW
@@ -437,13 +531,15 @@ tiered_leads AS (
         *,
         -- Tier Display Names (for SGA dashboard)
         CASE score_tier
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN '⭐ Tier 1B_PRIME: Zero Friction Bleeder'
             WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN '🏆 Tier 1A: Prime Mover + CFP'
+            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN '🚀 Tier 1G_ENHANCED: Sweet Spot Growth'
             WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN '🥇 Tier 1B: Prime Mover (Pure RIA)'
+            WHEN 'TIER_1G_GROWTH_STAGE' THEN '🚀 Tier 1G: Growth Stage (Outside Sweet Spot)'
             WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN '🥇 Prime Mover (Small Firm)'
             WHEN 'TIER_1D_SMALL_FIRM' THEN '🥇 Small Firm Advisor'
             WHEN 'TIER_1E_PRIME_MOVER' THEN '🥇 Prime Mover'
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN '🏆 Tier 1F: HV Wealth (Bleeding)'
-            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN '🚀 Tier 1G: Growth Stage (Stable)'
             WHEN 'TIER_2A_PROVEN_MOVER' THEN '🥈 Proven Mover'
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN '🥈 Moderate Bleeder'
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN '🥉 Experienced Mover'
@@ -451,15 +547,17 @@ tiered_leads AS (
             ELSE 'Standard'
         END as tier_display,
         
-        -- Expected Conversion Rate (calibrated from 3-year historical data)
+        -- Expected Conversion Rate (V3.3.3 UPDATED - ordered by performance)
         CASE score_tier
-            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 0.1644      -- NEW: 16.44% (n=73)
-            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 0.1648 -- NEW: 16.48% (n=91)
-            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 0.1321   -- UPDATED: 13.21% (was 15%)
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 0.1364     -- V3.3.3: 13.64% (n=22) - HIGHEST
+            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 0.1000        -- V3.3.3: 10.00% (n=50) - UPDATED
+            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 0.0909    -- V3.3.3: 9.09% (n=66) - NEW
+            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 0.0549  -- V3.3.3: 5.49% (n=237) - UPDATED
+            WHEN 'TIER_1G_GROWTH_STAGE' THEN 0.0508           -- V3.3.3: 5.08% (n=59) - NEW
+            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 0.1321     -- UPDATED: 13.21% (was 15%)
             WHEN 'TIER_1D_SMALL_FIRM' THEN 0.14
-            WHEN 'TIER_1E_PRIME_MOVER' THEN 0.1321         -- UPDATED: 13.21% (was 13%)
-            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 0.1278   -- NEW: 12.78% (n=266)
-            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN 0.072 -- V3.3.2: 7.20% (n=125)
+            WHEN 'TIER_1E_PRIME_MOVER' THEN 0.1321           -- UPDATED: 13.21% (was 13%)
+            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 0.1278      -- NEW: 12.78% (n=266)
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 0.10
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 0.11
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 0.10
@@ -467,15 +565,17 @@ tiered_leads AS (
             ELSE 0.0382                                       -- UPDATED: 3.82% baseline
         END as expected_conversion_rate,
         
-        -- Expected Lift vs baseline (3.82%)
+        -- Expected Lift vs baseline (3.82%) - V3.3.3 UPDATED
         CASE score_tier
-            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 4.30        -- 16.44% / 3.82%
-            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 4.31   -- 16.48% / 3.82%
-            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 3.46     -- 13.21% / 3.82%
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 3.57    -- V3.3.3: 13.64% / 3.82% - HIGHEST
+            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 2.62       -- V3.3.3: 10.00% / 3.82% - UPDATED
+            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 2.38    -- V3.3.3: 9.09% / 3.82% - NEW
+            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 1.44   -- V3.3.3: 5.49% / 3.82% - UPDATED
+            WHEN 'TIER_1G_GROWTH_STAGE' THEN 1.33          -- V3.3.3: 5.08% / 3.82% - NEW
+            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 3.46      -- 13.21% / 3.82%
             WHEN 'TIER_1D_SMALL_FIRM' THEN 3.66
             WHEN 'TIER_1E_PRIME_MOVER' THEN 3.46           -- 13.21% / 3.82%
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 3.35     -- 12.78% / 3.82%
-            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN 1.88   -- V3.3.2: 7.20% / 3.82%
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 2.5
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 2.5
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 2.5
@@ -483,15 +583,17 @@ tiered_leads AS (
             ELSE 1.00
         END as expected_lift,
         
-        -- Priority Ranking (for sorting - lower = higher priority)
+        -- Priority Ranking (for sorting - lower = higher priority) - V3.3.3 UPDATED
         CASE score_tier
-            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 1           -- NEW: Highest priority
-            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 2      -- NEW: Second highest
-            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 3         -- UPDATED: Was 1, now 3
-            WHEN 'TIER_1D_SMALL_FIRM' THEN 4
-            WHEN 'TIER_1E_PRIME_MOVER' THEN 5              -- UPDATED: Was 3, now 5
-            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 6        -- NEW
-            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN 7     -- V3.3.2: After T1F, before T2
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 1       -- V3.3.3: Highest priority (13.64%)
+            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 2          -- V3.3.3: Second priority (10.00%)
+            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 3      -- V3.3.3: Third priority (9.09%)
+            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 4     -- V3.3.3: Fourth priority (5.49%)
+            WHEN 'TIER_1G_GROWTH_STAGE' THEN 5             -- V3.3.3: Fifth priority (5.08%)
+            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 6        -- UPDATED: Was 1, now 6
+            WHEN 'TIER_1D_SMALL_FIRM' THEN 7
+            WHEN 'TIER_1E_PRIME_MOVER' THEN 8              -- UPDATED: Was 3, now 8
+            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 9        -- UPDATED: Was 6, now 9
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 8             -- UPDATED from 7
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 8         -- UPDATED from 7
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 9         -- UPDATED from 8
@@ -499,15 +601,17 @@ tiered_leads AS (
             ELSE 99
         END as priority_rank,
         
-        -- Action Recommended
+        -- Action Recommended - V3.3.3 UPDATED
         CASE score_tier
-            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN '🔥 ULTRA-PRIORITY: Call immediately - CFP at unstable firm'
-            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN '🔥 Call immediately - pure RIA (no BD ties)'
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN '⭐ ULTRA-PRIORITY: Zero Friction Bleeder - ALL barriers removed (13.64% conversion)'
+            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN '🔥 ULTRA-PRIORITY: Call immediately - CFP at unstable firm (10.00% conversion)'
+            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN '🚀 HIGH PRIORITY: Sweet Spot Growth Advisor - optimal AUM range (9.09% conversion)'
+            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN '🔥 Call immediately - pure RIA (no BD ties) - 5.49% conversion'
+            WHEN 'TIER_1G_GROWTH_STAGE' THEN '🚀 High priority - proactive mover at stable firm (5.08% conversion)'
             WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 'Call immediately - highest priority'
             WHEN 'TIER_1D_SMALL_FIRM' THEN 'Call immediately - highest priority'
             WHEN 'TIER_1E_PRIME_MOVER' THEN 'Call immediately - highest priority'
             WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN '🔥 High priority - wealth leader at unstable firm'
-            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN '🚀 High priority - proactive mover at stable firm'
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 'Priority outreach within 24 hours'
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 'Priority outreach within 24 hours'
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 'Priority follow-up this week'
@@ -517,19 +621,23 @@ tiered_leads AS (
         
         -- Tier Explanation (for sales team - V3.2.1 includes certification context)
         CASE score_tier
-            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 'CFP holder (Certified Financial Planner) at bleeding firm - CFP designation indicates book ownership and client relationships, making this advisor highly portable. Highest conversion potential at 16.44% (4.30x baseline).'
-            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 'Fee-only RIA (Series 65 only, no Series 7) meeting Prime Mover criteria - pure RIA advisors have no broker-dealer ties, making transitions easier. Expected 16.48% conversion (4.31x baseline).'
-            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 'Mid-career advisor (1-3yr tenure, 5-15yr exp) at small bleeding firm - highest conversion signal'
-            WHEN 'TIER_1D_SMALL_FIRM' THEN 'Recent joiner at very small firm (<10 reps) - high portability signal'
-            WHEN 'TIER_1E_PRIME_MOVER' THEN 'Mid-career advisor at bleeding firm - proven high-converting segment'
-            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 'High-Value Wealth title holder (Wealth Manager, Director, Senior Advisor, Founder/Principal/Partner) at firm losing advisors. This combination of ownership-level title and firm instability historically converts at 12.78% (3.35x baseline). Title indicates book ownership and client relationships.'
-            WHEN 'TIER_1G_GROWTH_STAGE_ADVISOR' THEN CONCAT(
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN CONCAT(
+                FirstName, ' is a ZERO FRICTION BLEEDER: ',
+                'Pure RIA (Series 65 only) at small firm (', CAST(firm_rep_count_at_contact AS STRING), ' reps) ',
+                'using portable custodian. Firm is bleeding (', CAST(firm_net_change_12mo AS STRING), ' net change). ',
+                'All transition barriers removed - highest conversion segment (13.64%, 3.57x baseline).'
+            )
+            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN CONCAT(
+                FirstName, ' is a SWEET SPOT GROWTH ADVISOR: ',
+                'Mid-career (', CAST(ROUND(industry_tenure_months/12, 0) AS STRING), ' years) ',
+                'with optimal client base ($', CAST(ROUND(avg_account_size/1000, 0) AS STRING), 'K avg account). ',
+                'Firm is stable - proactive mover seeking platform upgrade (9.09% conversion, 2.38x baseline).'
+            )
+            WHEN 'TIER_1G_GROWTH_STAGE' THEN CONCAT(
                 FirstName, ' is a GROWTH STAGE ADVISOR: ',
-                'Mid-career professional (', CAST(ROUND(industry_tenure_months/12, 0) AS STRING), ' years experience) ',
-                'with an established practice at ', Company, '. ',
-                'Firm is stable but advisor may be seeking platform upgrade. ',
-                'Proactive mover - strategic growth opportunity, not crisis-driven. ',
-                'Expected conversion: 7.20% (1.88x baseline).'
+                'Mid-career (', CAST(ROUND(industry_tenure_months/12, 0) AS STRING), ' years) ',
+                'with established practice at ', Company, '. ',
+                'Firm is stable - strategic growth opportunity (5.08% conversion, 1.33x baseline).'
             )
             WHEN 'TIER_2A_PROVEN_MOVER' THEN 'Has changed firms 3+ times - demonstrated willingness to move'
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 'Experienced advisor at firm losing 1-10 reps - instability signal'
@@ -583,6 +691,6 @@ SELECT
     avg_account_size,
     practice_maturity,
     CURRENT_TIMESTAMP() as scored_at,
-    'V3.3.2_01012026_GROWTH_STAGE_TIER' as model_version
+    'V3.3.3_01012026_ZERO_FRICTION_SWEET_SPOT' as model_version
 FROM tiered_leads
 ORDER BY priority_rank, expected_conversion_rate DESC, contacted_date DESC

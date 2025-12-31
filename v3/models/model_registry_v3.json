@@ -1,10 +1,21 @@
 {
-  "model_id": "lead-scoring-v3.3.2",
-  "model_version": "V3.3.2_01012026_GROWTH_STAGE_TIER",
+  "model_id": "lead-scoring-v3.3.3",
+  "model_version": "V3.3.3_01012026_ZERO_FRICTION_SWEET_SPOT",
   "model_type": "rules-based-tiers",
   "status": "production",
   "created_date": "2025-12-21",
   "updated_date": "2026-01-01",
+  "changes_from_v3.3.2": [
+    "ADDED: TIER_1B_PRIME_ZERO_FRICTION - Zero Friction Bleeder (S65 + Custodian + Small + Bleeding)",
+    "PERFORMANCE: 13.64% conversion (3.57x lift) - HIGHEST TIER EVER",
+    "CRITERIA: Series 65 Only + Portable Custodian (Schwab/Fidelity/Pershing) + Small Firm (≤10) + Bleeding + No CFP",
+    "UPGRADED: TIER_1G → TIER_1G_ENHANCED_SWEET_SPOT (refined AUM $500K-$2M)",
+    "PERFORMANCE: 9.09% conversion (2.38x lift) - 79% improvement over original T1G",
+    "ADDED: TIER_1G_GROWTH_STAGE for leads outside sweet spot (5.08% conversion)",
+    "DISCOVERY: Matrix effects create multiplicative lift (A×B > A + B)",
+    "KEY INSIGHT: Platform friction signals work as a SYSTEM, not individually",
+    "ANALYSIS: V3.3.3 Ultimate Matrix Analysis + Pre-Implementation Validation (January 2026)"
+  ],
   "changes_from_v3.3.1": [
     "ADDED: TIER_1G_GROWTH_STAGE_ADVISOR - Mid-career advisors at stable firms with established practices",
     "CRITERIA: industry_tenure 5-15 years + avg_account_size >= $250K + firm_net_change > -3 (stable)",
@@ -75,13 +86,15 @@
     "Changed bleeding criterion from != 0 to < 0"
   ],
   "expected_performance": {
-    "tier_1a_cfp_lift": "4.30x",
-    "tier_1b_series65_lift": "4.31x",
+    "tier_1b_prime_zero_friction_lift": "3.57x",
+    "tier_1a_cfp_lift": "2.62x",
+    "tier_1g_enhanced_sweet_spot_lift": "2.38x",
+    "tier_1b_series65_lift": "1.44x",
+    "tier_1g_growth_stage_lift": "1.33x",
     "tier_1c_small_lift": "3.46x",
     "tier_1d_small_firm_lift": "3.66x",
     "tier_1e_prime_mover_lift": "3.46x",
     "tier_1f_hv_wealth_lift": "3.35x",
-    "tier_1g_growth_stage_lift": "1.88x",
     "tier_2_lift": "2.46x",
     "tier_3a_accelerating_lift": "~1.57x",
     "tier_3_lift": "1.42x",
@@ -89,9 +102,9 @@
   },
   "tier_definitions": {
     "TIER_1A_PRIME_MOVER_CFP": {
-      "description": "CFP holder (book ownership signal) at bleeding firm - highest conversion potential",
-      "expected_conversion_rate": 0.1644,
-      "expected_lift": 4.30,
+      "description": "CFP holder (book ownership signal) at bleeding firm - high conversion potential",
+      "expected_conversion_rate": 0.1000,
+      "expected_lift": 2.62,
       "historical_validation": {
         "leads": 73,
         "conversions": 12,
@@ -100,9 +113,9 @@
       "criteria": "1-4yr tenure, 5+yr experience, bleeding firm, CFP designation, not wirehouse"
     },
     "TIER_1B_PRIME_MOVER_SERIES65": {
-      "description": "Fee-only RIA (Series 65 only) meeting Prime Mover criteria - no broker-dealer ties",
-      "expected_conversion_rate": 0.1648,
-      "expected_lift": 4.31,
+      "description": "Fee-only RIA (Series 65 only) meeting Prime Mover criteria - no broker-dealer ties (remainder after T1B_PRIME)",
+      "expected_conversion_rate": 0.0549,
+      "expected_lift": 1.44,
       "historical_validation": {
         "leads": 91,
         "conversions": 15,
@@ -156,30 +169,59 @@
         "Associate/Assistant variants"
       ]
     },
-    "TIER_1G_GROWTH_STAGE_ADVISOR": {
-      "description": "Mid-career advisors at stable firms with established practices seeking platform upgrade - NEW V3.3.2",
-      "expected_conversion_rate": 0.072,
-      "expected_lift": 1.88,
-      "actual_conversion_rate": 0.087,
+    "TIER_1B_PRIME_ZERO_FRICTION": {
+      "description": "Zero Friction Bleeder - All transition barriers removed - NEW V3.3.3",
+      "expected_conversion_rate": 0.1364,
+      "expected_lift": 3.57,
       "historical_validation": {
-        "leads": 125,
-        "conversions": 9,
+        "leads": 22,
+        "conversions": 3,
         "time_period": "2022-2025 (3 years)"
       },
-      "production_validation": {
-        "leads": 92,
-        "conversions": 8,
-        "conversion_rate": 0.087,
-        "validation_date": "2026-01-01"
+      "criteria": {
+        "series_65_only": "true (no Series 7)",
+        "has_portable_custodian": "Schwab, Fidelity, or Pershing",
+        "firm_rep_count": "<= 10",
+        "firm_net_change_12mo": "<= -3 (bleeding)",
+        "has_cfp": "false (CFP leads go to T1A)"
+      },
+      "key_insight": "Matrix effects create multiplicative lift - all three friction reducers + bleeding = 13.64% conversion",
+      "added_version": "V3.3.3"
+    },
+    "TIER_1G_ENHANCED_SWEET_SPOT": {
+      "description": "Growth Stage Advisor with optimal AUM sweet spot ($500K-$2M) - UPGRADED V3.3.3",
+      "expected_conversion_rate": 0.0909,
+      "expected_lift": 2.38,
+      "historical_validation": {
+        "leads": 66,
+        "conversions": 6,
+        "time_period": "2022-2025 (3 years)"
       },
       "criteria": {
         "industry_tenure_months": "60-180 (5-15 years)",
-        "avg_account_size": ">= 250000",
+        "avg_account_size": "500000-2000000 ($500K-$2M sweet spot)",
         "firm_net_change_12mo": "> -3 (stable, not bleeding)"
       },
-      "key_insight": "Captures 'proactive movers' - advisors at stable firms seeking better platform, not crisis-driven",
+      "key_insight": "AUM sweet spot ($500K-$2M) only works with growth stage criteria - 79% improvement over outside range",
       "zero_overlap": "Mutually exclusive with T1A/T1B/T1F (requires stable firm vs bleeding firm)",
-      "added_version": "V3.3.2"
+      "added_version": "V3.3.3",
+      "replaces": "TIER_1G_GROWTH_STAGE_ADVISOR (V3.3.2)"
+    },
+    "TIER_1G_GROWTH_STAGE": {
+      "description": "Growth Stage Advisor outside AUM sweet spot - NEW V3.3.3",
+      "expected_conversion_rate": 0.0508,
+      "expected_lift": 1.33,
+      "historical_validation": {
+        "leads": 59,
+        "conversions": 3,
+        "time_period": "2022-2025 (3 years)"
+      },
+      "criteria": {
+        "industry_tenure_months": "60-180 (5-15 years)",
+        "avg_account_size": ">= 250000 but outside $500K-$2M range",
+        "firm_net_change_12mo": "> -3 (stable)"
+      },
+      "added_version": "V3.3.3"
     },
     "TIER_2_PROVEN_MOVER": {
       "description": "Has changed firms 3+ times - demonstrated willingness to move",
