@@ -31,8 +31,16 @@ import shap
 # ============================================================================
 WORKING_DIR = Path(r"C:\Users\russe\Documents\lead_scoring_production\pipeline")
 # Updated for V4.1.0 deployment (2025-12-30)
-V4_MODEL_DIR = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\models\v4.1.0")
-V4_FEATURES_FILE = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\data\v4.1.0\final_features.json")
+# Try R3 directory first, fallback to v4.1.0
+V4_MODEL_DIR_R3 = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\models\v4.1.0_r3")
+V4_MODEL_DIR = V4_MODEL_DIR_R3 if (V4_MODEL_DIR_R3 / "model.pkl").exists() or (V4_MODEL_DIR_R3 / "model.json").exists() else Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\models\v4.1.0")
+V4_FEATURES_FILE_R3 = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\data\v4.1.0_r3\final_features.json")
+V4_FEATURES_FILE = V4_FEATURES_FILE_R3 if V4_FEATURES_FILE_R3.exists() else Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\data\v4.1.0\final_features.json")
+
+# Calibrator (optional - for monotonic percentile ranking)
+# Try R3 directory first, fallback to v4.1.0
+V4_CALIBRATOR_FILE_R3 = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\models\v4.1.0_r3\isotonic_calibrator.pkl")
+V4_CALIBRATOR_FILE = V4_CALIBRATOR_FILE_R3 if V4_CALIBRATOR_FILE_R3.exists() else V4_MODEL_DIR / "isotonic_calibrator.pkl"
 
 EXPORTS_DIR = WORKING_DIR / "exports"
 LOGS_DIR = WORKING_DIR / "logs"
@@ -306,6 +314,19 @@ def calculate_percentiles(scores):
     """Calculate percentile ranks (0-99)."""
     percentiles = pd.Series(scores).rank(pct=True, method='min') * 100
     return percentiles.astype(int).values
+
+
+def load_calibrator():
+    """Load isotonic calibrator if available."""
+    if not V4_CALIBRATOR_FILE.exists():
+        print(f"[INFO] No calibrator found at {V4_CALIBRATOR_FILE}")
+        print(f"[INFO] Using raw scores for percentile calculation")
+        return None
+    
+    with open(V4_CALIBRATOR_FILE, 'rb') as f:
+        calibrator = pickle.load(f)
+    print(f"[OK] Loaded calibrator from {V4_CALIBRATOR_FILE}")
+    return calibrator
 
 
 def calculate_per_lead_feature_importance(model, X, scores, feature_list):
@@ -812,7 +833,20 @@ def main():
     X = prepare_features(df_raw, feature_list)
     
     # Score
-    scores = score_prospects(model, X)
+    raw_scores = score_prospects(model, X)
+    
+    # Apply calibration (if calibrator exists)
+    calibrator = load_calibrator()
+    if calibrator is not None:
+        calibrated_scores = calibrator.transform(raw_scores)
+        print(f"[OK] Applied isotonic calibration")
+        print(f"[INFO] Raw score range: {raw_scores.min():.4f} - {raw_scores.max():.4f}")
+        print(f"[INFO] Calibrated range: {calibrated_scores.min():.4f} - {calibrated_scores.max():.4f}")
+        scores = calibrated_scores
+    else:
+        scores = raw_scores
+    
+    # Continue with existing percentile calculation
     percentiles = calculate_percentiles(scores)
     
     # Calculate SHAP values for accurate feature importance per prospect
