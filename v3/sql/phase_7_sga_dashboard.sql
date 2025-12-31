@@ -33,6 +33,6 @@ SELECT
     scored_at,
     model_version
 
-FROM `savvy-gtm-analytics.ml_features.lead_scores_v3_2_12212025`
+FROM `savvy-gtm-analytics.ml_features.lead_scores_v3`
 WHERE score_tier != 'STANDARD'
 ORDER BY priority_rank, expected_conversion_rate DESC
