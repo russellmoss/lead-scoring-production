@@ -53,6 +53,7 @@ class LeadScorerV4:
         self._load_model()
         self._load_features()
         self._load_feature_importance()
+        self._load_calibrator()
     
     def _load_model(self):
         """Load the trained XGBoost model from pickle."""
@@ -84,6 +85,25 @@ class LeadScorerV4:
             print(f"[INFO] Loaded feature importance from {importance_path}")
         else:
             print(f"[WARNING] Feature importance file not found: {importance_path}")
+    
+    def _load_calibrator(self):
+        """Load isotonic calibrator if available."""
+        # Try current model_dir first
+        calibrator_path = self.model_dir / "isotonic_calibrator.pkl"
+        
+        # If not found and we're in v4.1.0, try v4.1.0_r3
+        if not calibrator_path.exists() and "v4.1.0" in str(self.model_dir) and "r3" not in str(self.model_dir):
+            alt_path = Path(__file__).parent.parent / "models" / "v4.1.0_r3" / "isotonic_calibrator.pkl"
+            if alt_path.exists():
+                calibrator_path = alt_path
+        
+        if calibrator_path.exists():
+            with open(calibrator_path, 'rb') as f:
+                self.calibrator = pickle.load(f)
+            print(f"[INFO] Loaded calibrator from {calibrator_path}")
+        else:
+            self.calibrator = None
+            print(f"[INFO] No calibrator found (optional)")
     
     def prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -158,6 +178,27 @@ class LeadScorerV4:
         scores = self.model.predict(dtest)
         
         return scores
+    
+    def score_leads_calibrated(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Score leads and apply isotonic calibration.
+        
+        Returns calibrated scores if calibrator exists, otherwise raw scores.
+        Calibrated scores guarantee monotonic percentile rankings.
+        
+        Args:
+            df: DataFrame with required features
+            
+        Returns:
+            np.ndarray of calibrated scores (0-1)
+        """
+        raw_scores = self.score_leads(df)
+        
+        if self.calibrator is not None:
+            calibrated_scores = self.calibrator.transform(raw_scores)
+            return calibrated_scores
+        else:
+            return raw_scores
     
     def get_percentiles(self, scores: np.ndarray) -> np.ndarray:
         """

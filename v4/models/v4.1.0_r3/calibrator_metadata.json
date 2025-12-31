@@ -1,0 +1,11 @@
+{
+  "created": "2025-12-30T21:39:56.345610",
+  "model_version": "v4.1.0_r3",
+  "test_samples": 73725,
+  "positive_samples": 1747,
+  "raw_pred_min": 0.13267819583415985,
+  "raw_pred_max": 0.7007312774658203,
+  "calibrated_pred_min": 0.0,
+  "calibrated_pred_max": 0.1818181872367859,
+  "is_monotonic": true
+}

@@ -1,0 +1,14 @@
+{
+  "baseline_auc": 0.6276512519966035,
+  "enhanced_auc": 0.627284589486435,
+  "observed_auc_diff": -0.00036666251016859164,
+  "baseline_lift": 2.051408342311837,
+  "enhanced_lift": 1.7159336697909156,
+  "observed_lift_diff": -0.33547467252092145,
+  "auc_p_value": 0.5,
+  "lift_p_value": 0.5,
+  "significant_auc": false,
+  "significant_lift": false,
+  "bootstrap_samples": 10000,
+  "permutations": 10000
+}

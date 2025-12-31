@@ -1,0 +1,56 @@
+{
+  "gates_passed": 1,
+  "gates_total": 6,
+  "gates": {
+    "G-NEW-1": {
+      "passed": false,
+      "name": "AUC Improvement",
+      "threshold": 0.005,
+      "actual": -0.0003666625101685,
+      "description": "AUC improvement >= 0.005 (actual: -0.0004)"
+    },
+    "G-NEW-2": {
+      "passed": false,
+      "name": "Lift Improvement",
+      "threshold": 0.1,
+      "actual": -0.335474672520921,
+      "description": "Lift improvement >= 0.1x (actual: -0.34x)"
+    },
+    "G-NEW-3": {
+      "passed": false,
+      "name": "Statistical Significance",
+      "threshold": 0.05,
+      "actual": 0.5,
+      "description": "P-value < 0.05 (actual: 0.5000)"
+    },
+    "G-NEW-4": {
+      "passed": false,
+      "name": "Temporal Stability",
+      "threshold": 3,
+      "actual": 1,
+      "description": "Improved in >= 3/4 periods (actual: 1/4)"
+    },
+    "G-NEW-5": {
+      "passed": false,
+      "name": "Bottom 20% Not Degraded",
+      "threshold": 0.1,
+      "actual": "N/A",
+      "description": "Bottom 20% conversion rate not degraded (overall lift: -0.34x)"
+    },
+    "G-NEW-6": {
+      "passed": true,
+      "name": "PIT Compliance",
+      "threshold": 0,
+      "actual": 0,
+      "description": "PIT compliance verified in SQL design (DATE_SUB, historical tables)"
+    }
+  },
+  "recommendation": "DO NOT DEPLOY - Insufficient evidence",
+  "confidence": "N/A",
+  "baseline_auc": 0.6276512519966035,
+  "enhanced_auc": 0.627284589486435,
+  "baseline_lift": 2.051408342311837,
+  "enhanced_lift": 1.7159336697909156,
+  "auc_delta": -0.0003666625101685,
+  "lift_delta": -0.335474672520921
+}

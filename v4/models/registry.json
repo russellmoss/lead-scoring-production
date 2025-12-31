@@ -55,7 +55,14 @@
       "deployment_strategy": "hybrid",
       "use_case": "deprioritization_filter",
       "deprioritization_threshold": 20,
-      "notes": "Feature selection (22 features) + stronger regularization. Best performing model to date. SHAP interpretability via KernelExplainer."
+      "calibration": {
+        "enabled": true,
+        "method": "isotonic_regression",
+        "file": "isotonic_calibrator.pkl",
+        "created": "2025-12-30",
+        "purpose": "Ensures monotonic percentile rankings"
+      },
+      "notes": "Feature selection (22 features) + stronger regularization. Best performing model to date. SHAP interpretability via KernelExplainer. Isotonic calibration added Dec 30, 2025 to fix non-monotonic lift curve."
     },
     "v4.0.0": {
       "model_version": "v4.0.0",

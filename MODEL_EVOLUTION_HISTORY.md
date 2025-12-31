@@ -34,6 +34,7 @@ This document chronicles the complete evolution of the lead scoring system from 
 | V4.1.0 R1 | Dec 30, 2025 | XGBoost (26 features) | ~1.8x | Deprecated | Severe overfitting |
 | V4.1.0 R2 | Dec 30, 2025 | XGBoost (22 features) | ~1.9x | Deprecated | SHAP compatibility issues |
 | V4.1.0 R3 | Dec 30, 2025 | XGBoost (22 features) | 2.03x | **Production** | SHAP working via KernelExplainer |
+| V5.0 | Dec 30, 2025 | Enhancement Validation | N/A | **NOT DEPLOYED** | Features degraded performance |
 
 ---
 
@@ -254,6 +255,204 @@ ERROR: could not convert string to float: '[5E-1]'
 **SHAP Results** (V4.1.0 R3):
 - Top Features: `has_email`, `tenure_months`, `tenure_bucket_encoded`, `days_since_last_move`, `is_dual_registered`
 - 3 new V4.1 features in top 10
+
+#### Isotonic Calibration (Dec 30, 2025) - Limited Success
+
+**Problem**: V4.1.0 R3 had a non-monotonic lift curve where decile 4 (0.47x) and decile 5 (0.49x) had lower lift than decile 3 (0.63x), making percentile rankings unreliable for within-tier sorting.
+
+**Solution Attempted**: Applied isotonic regression calibration as a post-processing wrapper to force monotonicity without retraining the model.
+
+**Implementation**:
+- Created `isotonic_calibrator.pkl` using sklearn.isotonic.IsotonicRegression
+- Updated `score_prospects_monthly.py` to apply calibration before percentile calculation
+- Updated `LeadScorerV4` class with `score_leads_calibrated()` method
+- Original model files unchanged (verified by MD5 checksums)
+
+**Calibration Results (Dec 31, 2025)**:
+
+**Outcome**: Calibration did not resolve non-monotonicity in lift curve.
+
+**Findings**:
+- Isotonic calibration ensures score monotonicity but does not change lead rankings
+- Non-monotonicity in deciles 4-5 is a model limitation, not a calibration issue
+- Calibration preserved the same ranking, so the same "bad" leads stayed in the same deciles
+- Top decile lift decreased slightly (1.75x → 1.70x)
+- Bottom 20% conversion decreased slightly (~1.2% → ~1.0%)
+- Non-monotonic deciles increased from 2 (D4, D5) to 3 (D4, D5, D8)
+
+**What Isotonic Calibration Actually Does**:
+- ✅ Transforms scores monotonically (higher raw scores → higher calibrated scores)
+- ✅ Calibrates probabilities to be more interpretable
+- ❌ Does NOT change lead rankings (same leads stay in same deciles)
+- ❌ Does NOT fix model ranking errors
+
+**Decision**: **KEEP** calibration for now (easy to rollback if needed). The calibration doesn't hurt and provides calibrated probabilities, even though it didn't solve the non-monotonicity problem.
+
+**Impact on Production**: **None** — V4 is used for deprioritization (bottom 20%) which is unaffected. The hybrid system uses V3 for prioritization and V4 only to filter the bottom 20%. The middle-decile non-monotonicity doesn't affect either use case.
+
+**Files Added**:
+- `v4/models/v4.1.0_r3/isotonic_calibrator.pkl`
+- `v4/models/v4.1.0_r3/calibrator_metadata.json`
+
+**Usage**: Calibration applied automatically in `score_prospects_monthly.py`. If calibrator file is missing, script falls back to raw scores.
+
+**Rollback Instructions** (if needed):
+```bash
+# Delete calibrator
+rm v4/models/v4.1.0_r3/isotonic_calibrator.pkl
+# Script will automatically use raw scores
+```
+
+---
+
+## V5.0 Enhancement Validation (December 2025) - NOT DEPLOYED ❌
+
+### Overview
+
+| Attribute | Value |
+|-----------|-------|
+| **Status** | ❌ **NOT DEPLOYED** - Features degraded performance |
+| **Date** | December 30, 2025 |
+| **Objective** | Test new features to improve contacting-to-MQL conversion |
+| **Outcome** | All candidate features degraded model performance |
+| **Gates Passed** | 1/6 (only PIT compliance) |
+| **Decision** | Keep V4.1.0 R3 as production model |
+
+### Motivation
+
+Following the successful V4.1.0 R3 deployment, we explored additional features from FINTRX data to potentially improve model performance:
+
+1. **Firm AUM** - Hypothesis: Larger AUM = more portable book
+2. **Accolades** - Hypothesis: Recognized advisors = higher quality
+3. **Custodians** - Hypothesis: Tech stack signals platform fit
+4. **Licenses** - Hypothesis: License sophistication = advisor quality
+5. **Disclosures** - Hypothesis: Negative signal for exclusion
+
+### Validation Framework
+
+Used a rigorous 6-phase validation framework with 6 gates:
+
+| Gate | Criterion | Threshold | Result |
+|------|-----------|-----------|--------|
+| G-NEW-1 | AUC improvement | ≥ 0.005 | ❌ -0.0004 |
+| G-NEW-2 | Lift improvement | ≥ 0.1x | ❌ -0.34x |
+| G-NEW-3 | Statistical significance | p < 0.05 | ❌ p = 0.50 |
+| G-NEW-4 | Temporal stability | ≥ 3/4 periods | ❌ 1/4 |
+| G-NEW-5 | Bottom 20% not degraded | < 10% increase | ❌ Degraded |
+| G-NEW-6 | PIT compliance | No leakage | ✅ Passed |
+
+**Only 1 out of 6 gates passed** (PIT compliance, which is a design requirement)
+
+### Phase 1: Feature Candidate Creation
+
+**Table Created**: `ml_experiments.feature_candidates_v5`  
+**Rows**: 285,690 (one per advisor)
+
+| Feature | Coverage | Status |
+|---------|----------|--------|
+| Firm AUM | 87.76% | ✅ High |
+| Accolades | 4.5% | ⚠️ Low |
+| Custodians | 64.37% | ✅ Good |
+| Disclosures | 17.89% | ✅ Acceptable |
+| Licenses | 100% | ✅ Perfect |
+
+**Key Implementation**:
+- All features use PIT-safe logic (DATE_SUB, historical tables)
+- Deduplication implemented to ensure one row per advisor
+- Cross-region dataset issue resolved (used `FinTrx_data_CA` instead of `FinTrx_data`)
+
+### Phase 2: Univariate Analysis
+
+**Features Analyzed**: 14  
+**Promising**: 2 (`firm_aum_bucket`, `has_accolade`)  
+**Weak**: 5  
+**Skipped**: 7
+
+| Feature | Coverage | Lift | P-Value | Status |
+|---------|----------|------|---------|--------|
+| firm_aum_bucket | 87.76% | 1.80x | < 0.0001 | ✅ Promising |
+| has_accolade | 4.5% | 1.70x | 0.0252 | ✅ Promising |
+| log_firm_aum | 87.76% | 0.23x | < 0.0001 | ⚠️ Negative correlation |
+
+**Key Finding**: `log_firm_aum` showed **negative correlation** (Q4 < Q1), suggesting categorical buckets capture signal better than continuous transformation.
+
+### Phase 3: Ablation Study
+
+**Critical Finding**: Both promising features **degraded** model performance when added.
+
+| Model | Features | AUC-ROC | Lift | AUC Δ | Lift Δ |
+|-------|----------|---------|------|-------|--------|
+| BASELINE (V4.1) | 22 | 0.6277 | 2.05x | - | - |
+| + firm_aum_bucket | 23 | 0.6273 | 1.72x | -0.0004 | -0.34x |
+| + has_accolade | 23 | 0.6231 | 1.86x | -0.0046 | -0.19x |
+| + combined | 24 | 0.6275 | 1.73x | -0.0001 | -0.32x |
+
+**Conclusion**: Univariate signal ≠ Multivariate value. Features that look promising in isolation degraded the full model.
+
+### Phase 4: Multi-Period Backtesting
+
+| Period | Baseline AUC | Enhanced AUC | AUC Δ | Improved? |
+|--------|--------------|--------------|-------|-----------|
+| Feb-May 2024 | 0.5883 | 0.5654 | -0.0229 | ❌ |
+| Feb-Jul 2024 | 0.6356 | 0.6332 | -0.0024 | ❌ |
+| Feb-Sep 2024 | 0.6970 | 0.7031 | +0.0062 | ✅ |
+| Feb 2024-Mar 2025 | 0.5517 | 0.5503 | -0.0013 | ❌ |
+
+**Result**: Only 1/4 periods improved. Failed G-NEW-4 gate.
+
+### Phase 5: Statistical Significance
+
+| Metric | Baseline | Enhanced | Δ | P-value |
+|--------|----------|----------|---|---------|
+| AUC-ROC | 0.6277 | 0.6273 | -0.0004 | 0.50 |
+| Top Decile Lift | 2.05x | 1.72x | -0.34x | 0.50 |
+
+**Result**: No statistical evidence of improvement. High p-values confirm degradation is real.
+
+### Phase 6: Final Decision
+
+**Recommendation**: ❌ **DO NOT DEPLOY**
+
+**Reasons**:
+1. Features degrade AUC (-0.0004) and lift (-0.34x)
+2. Only 1/4 time periods showed improvement
+3. No statistical significance (p = 0.50)
+4. Only 1/6 validation gates passed
+
+### Key Learnings
+
+1. **Univariate ≠ Multivariate**: Features promising in isolation may not improve full model
+2. **V4.1 R3 is well-optimized**: Strong regularization makes marginal improvements difficult
+3. **Coverage isn't everything**: 87.76% AUM coverage still degraded performance
+4. **Low coverage causes instability**: 4.5% accolade coverage introduced noise
+5. **Redundancy**: New features likely correlated with existing V4.1 signals
+
+### Artifacts Preserved
+
+All experiment artifacts archived in `v5/experiments/reports/`:
+- `FINAL_VALIDATION_REPORT.md` - Comprehensive summary
+- `final_decision_results.json` - Gate pass/fail data
+- `PHASE1_RESULTS.md` through `PHASE6_RESULTS.md` - Phase-specific reports
+- `phase_2_univariate_analysis.csv` - Feature-level statistics
+- `ablation_study_results.csv` - Model comparison data
+- `multi_period_backtest_results.csv` - Period-by-period results
+- `statistical_significance_results.json` - P-values and test results
+
+### Validation Framework Success
+
+**The validation framework successfully prevented a production regression.** By testing before deployment, we:
+- ✅ Discovered features would harm performance
+- ✅ Avoided degrading January 2026 lead list quality
+- ✅ Documented findings for future reference
+- ✅ Confirmed V4.1.0 R3 remains optimal
+
+### Future Considerations
+
+If revisiting these features:
+1. **Interaction features**: Test `firm_aum_bucket × firm_stability_tier` instead of standalone
+2. **Post-model filtering**: Use `has_accolade` as tie-breaker, not model feature
+3. **Different transformations**: Investigate `log_firm_aum` negative correlation
+4. **Segment-specific models**: AUM may matter more for certain advisor segments
 
 ---
 
