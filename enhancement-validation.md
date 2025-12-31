@@ -1955,6 +1955,229 @@ if __name__ == '__main__':
 
 ---
 
+## Automated Orchestration & Report Generation
+
+### Overview
+
+To ensure comprehensive, consistent execution and automatic report generation, use the **Enhancement Validation Orchestrator** script. This script:
+
+1. ✅ Runs all 6 phases sequentially
+2. ✅ Validates data at each step
+3. ✅ Evaluates all gates automatically
+4. ✅ Generates a comprehensive markdown report
+5. ✅ Saves all results in structured formats (CSV, JSON, MD)
+
+### Setup
+
+**1. Create the orchestrator script:**
+
+Save the orchestrator code to: `v5/experiments/scripts/run_enhancement_validation.py`
+
+**2. Ensure directory structure exists:**
+
+```
+v5/
+├── experiments/
+│   ├── scripts/
+│   │   ├── run_enhancement_validation.py  ← Orchestrator (NEW)
+│   │   ├── feature_univariate_analysis.py
+│   │   ├── ablation_study.py
+│   │   ├── multi_period_backtest.py
+│   │   └── statistical_significance.py
+│   ├── reports/
+│   │   ├── FINAL_VALIDATION_REPORT.md     ← Auto-generated report (NEW)
+│   │   ├── phase_2_univariate_analysis.csv
+│   │   ├── ablation_study_results.csv
+│   │   ├── multi_period_backtest_results.csv
+│   │   ├── statistical_significance_results.json
+│   │   └── validation_results.json        ← Raw results (NEW)
+│   ├── sql/
+│   │   └── create_feature_candidates_v5.sql
+│   └── EXECUTION_LOG.md
+```
+
+### Usage
+
+**Run complete validation pipeline:**
+```bash
+cd "C:\Users\russe\Documents\lead_scoring_production"
+python v5/experiments/scripts/run_enhancement_validation.py --all
+```
+
+**Run specific phase:**
+```bash
+python v5/experiments/scripts/run_enhancement_validation.py --phase 2  # Univariate only
+```
+
+**Generate report from existing results:**
+```bash
+python v5/experiments/scripts/run_enhancement_validation.py --report-only
+```
+
+### Output Files
+
+After running `--all`, you will have:
+
+| File | Purpose |
+|------|---------|
+| `FINAL_VALIDATION_REPORT.md` | **Comprehensive markdown report** with all results |
+| `validation_results.json` | Raw structured data for programmatic access |
+| `phase_2_univariate_analysis.csv` | Feature-level statistics |
+| `ablation_study_results.csv` | Model comparison data |
+| `multi_period_backtest_results.csv` | Temporal stability data |
+| `statistical_significance_results.json` | P-values and confidence intervals |
+
+### Report Contents
+
+The auto-generated `FINAL_VALIDATION_REPORT.md` includes:
+
+1. **Executive Summary**
+   - Final recommendation (DEPLOY / CONDITIONAL / MORE TESTING / DO NOT DEPLOY)
+   - Gate status summary table
+   - Confidence level
+
+2. **Phase-by-Phase Results**
+   - Phase 1: Feature coverage validation
+   - Phase 2: Univariate analysis with recommendations
+   - Phase 3: Ablation study with best improvements
+   - Phase 4: Temporal stability across 4 periods
+   - Phase 5: Statistical significance testing
+
+3. **Gate Summary Table**
+   - G-NEW-1 through G-NEW-6 pass/fail status
+   - Threshold values and actual values
+
+4. **Next Steps**
+   - Specific actions based on recommendation
+
+5. **Appendix**
+   - File locations
+   - Timestamps
+   - Metadata
+
+---
+
+## Updated Cursor.ai Prompt for Complete Execution
+
+Use this prompt to have Cursor.ai run the complete validation pipeline agentically:
+
+```markdown
+# Cursor AI Task: Run Complete Enhancement Validation
+
+## Objective
+Execute the complete enhancement validation pipeline and generate a comprehensive final report.
+
+## Prerequisites Check
+1. Verify BigQuery access to `savvy-gtm-analytics`
+2. Verify `ml_experiments` dataset exists (create if not)
+3. Verify `v4_prospect_features` table exists
+
+## Execution Steps
+
+### Step 1: Create Feature Candidates Table
+Run the SQL from `enhancement-validation.md` Phase 1 to create:
+`savvy-gtm-analytics.ml_experiments.feature_candidates_v5`
+
+Verify with:
+```sql
+SELECT COUNT(*) FROM `savvy-gtm-analytics.ml_experiments.feature_candidates_v5`;
+```
+
+### Step 2: Run Orchestrator
+```bash
+cd "C:\Users\russe\Documents\lead_scoring_production"
+python v5/experiments/scripts/run_enhancement_validation.py --all
+```
+
+### Step 3: Review Generated Report
+Open and review: `v5/experiments/reports/FINAL_VALIDATION_REPORT.md`
+
+### Step 4: Document Results
+- If all gates pass: Proceed to model retraining
+- If gates fail: Document findings and next steps
+- Update `enhancement-validation.md` with actual results
+
+## Expected Outputs
+1. `FINAL_VALIDATION_REPORT.md` - Comprehensive summary
+2. `validation_results.json` - Structured results
+3. Console output showing phase-by-phase execution
+4. Gate status (PASS/FAIL) for all 6 gates
+
+## Success Criteria
+- All 6 phases complete without errors
+- Final report generated with recommendation
+- Gate summary table populated with actual values
+```
+
+---
+
+## Quick Reference: Gate Definitions
+
+| Gate | Name | Threshold | How Evaluated |
+|------|------|-----------|---------------|
+| **G-NEW-1** | AUC Improvement | ≥ 0.005 | Phase 3: Best feature group AUC delta |
+| **G-NEW-2** | Lift Improvement | ≥ 0.1x | Phase 3: Best feature group lift delta |
+| **G-NEW-3** | Statistical Significance | p < 0.05 | Phase 5: Bootstrap p-value |
+| **G-NEW-4** | Temporal Stability | ≥ 3/4 periods | Phase 4: Periods with improvement |
+| **G-NEW-5** | Bottom 20% Not Degraded | < 10% increase | Phase 3: Bottom quintile rate |
+| **G-NEW-6** | PIT Compliance | No leakage | SQL design verification |
+
+---
+
+## Troubleshooting
+
+### Issue: `ml_experiments` dataset not found
+```sql
+CREATE SCHEMA IF NOT EXISTS `savvy-gtm-analytics.ml_experiments`
+OPTIONS(description="Experimental tables for model enhancement testing");
+```
+
+### Issue: Missing target variable table
+The orchestrator expects `ml_features.v4_target_variable`. If it doesn't exist, verify it was created during V4.1 training:
+```sql
+-- Check if table exists
+SELECT table_name 
+FROM `savvy-gtm-analytics.ml_features.INFORMATION_SCHEMA.TABLES`
+WHERE table_name = 'v4_target_variable';
+```
+
+### Issue: Phase fails with data error
+1. Check BigQuery table schemas match expected columns
+2. Verify JOIN keys are correct (advisor_crd, firm_crd)
+3. Check for NULL handling in feature calculations
+4. Verify `v4_prospect_features` table exists and has data
+
+### Issue: Report shows "SKIPPED" for phases
+Run individual phase scripts first to generate the required CSV/JSON files:
+```bash
+# Run Phase 2 (creates phase_2_univariate_analysis.csv)
+python v5/experiments/scripts/feature_univariate_analysis.py
+
+# Run Phase 3 (creates ablation_study_results.csv)
+python v5/experiments/scripts/ablation_study.py
+
+# Run Phase 4 (creates multi_period_backtest_results.csv)
+python v5/experiments/scripts/multi_period_backtest.py
+
+# Run Phase 5 (creates statistical_significance_results.json)
+python v5/experiments/scripts/statistical_significance.py
+
+# Then run orchestrator to generate report
+python v5/experiments/scripts/run_enhancement_validation.py --report-only
+```
+
+### Issue: ExecutionLogger import error
+Ensure the script can find the ExecutionLogger:
+```python
+# The script uses this path resolution:
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+from v3.utils.execution_logger import ExecutionLogger
+```
+
+If this fails, verify `v3/utils/execution_logger.py` exists in the repository.
+
+---
+
 ## Appendix
 
 ### A: Full SQL Scripts
@@ -2018,3 +2241,4 @@ scikit-learn>=1.1.0
   - Added Cursor.ai prompt for agentic execution
   - Added quick reference gate definitions table
   - Added troubleshooting guide for common issues
+  - Added automated orchestration section with directory structure and output files
