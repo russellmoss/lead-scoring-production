@@ -1,7 +1,7 @@
 -- ============================================================================
--- JANUARY 2026 LEAD LIST GENERATOR (V3.2.5 + V4.1.0 R3 HYBRID)
+-- JANUARY 2026 LEAD LIST GENERATOR (V3.3.1 + V4.1.0 R3 HYBRID)
 -- ============================================================================
--- Version: 2.1 with V4.1.0 Integration (Updated 2025-12-30)
+-- Version: 2.2 with V3.3.1 Portable Book Exclusions (Updated 2025-12-31)
 -- 
 -- V4.1 INTEGRATION CHANGES:
 -- - Scores table: ml_features.v4_prospect_scores (SAME NAME, updated with V4.1 scores)
@@ -277,7 +277,23 @@ enriched_prospects AS (
     LEFT JOIN advisor_moves am ON bp.crd = am.crd
     LEFT JOIN firm_metrics fm ON bp.firm_crd = fm.firm_crd
     LEFT JOIN `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c ON bp.crd = c.RIA_CONTACT_CRD_ID
+    -- V3.3.1: Add discretionary ratio for portable book exclusion
+    LEFT JOIN (
+        SELECT 
+            CRD_ID as firm_crd,
+            SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) as discretionary_ratio,
+            CASE 
+                WHEN TOTAL_AUM IS NULL OR TOTAL_AUM = 0 THEN 'UNKNOWN'
+                WHEN SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) < 0.50 THEN 'LOW_DISCRETIONARY'
+                WHEN SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) >= 0.80 THEN 'HIGH_DISCRETIONARY'
+                ELSE 'MODERATE_DISCRETIONARY'
+            END as discretionary_tier
+        FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
+    ) fd ON bp.firm_crd = fd.firm_crd
     WHERE COALESCE(fm.turnover_pct, 0) < 100
+      -- V3.3.1: Exclude low discretionary firms (0.34x baseline)
+      -- Allow NULL/Unknown - don't penalize missing data
+      AND (fd.discretionary_ratio >= 0.50 OR fd.discretionary_ratio IS NULL)
 ),
 
 -- ============================================================================

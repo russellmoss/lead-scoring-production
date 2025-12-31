@@ -1,18 +1,40 @@
 
 -- =============================================================================
--- LEAD SCORING V3.2.4: UPDATED TIER MODEL WITH CERTIFICATIONS + TITLE EXCLUSIONS + HV WEALTH TIER + PRODUCING ADVISOR FILTER + INSURANCE EXCLUSIONS
+-- LEAD SCORING V3.3.1: PORTABLE BOOK SIGNAL EXCLUSIONS
 -- =============================================================================
--- Version: V3.2.4_12232025_INSURANCE_EXCLUSIONS
--- Changes: 
---   - Added CFP and Series 65 certification tiers (Tier 1A/1B), updated Tier 1 rates
---   - Added data-driven title exclusion logic (removes ~8.5% of leads with 0% conversion)
---   - Added TIER_1F_HV_WEALTH_BLEEDER: High-Value Wealth titles at bleeding firms (12.78% conversion, 3.35x lift)
---   - Added PRODUCING_ADVISOR = TRUE filter to exclude non-advisors (operations, compliance, etc.)
---   - Added insurance exclusions: excludes "Insurance Agent" or "Insurance" in title or firm name
--- Expected Lift: T1A (CFP) = 4.3x, T1B (Series 65) = 4.3x, T1 = 3.5x, T1F (HV Wealth) = 3.35x, T2A = 2.5x, T2B = 2.5x
--- Historical Validation: Tier 1A (73 leads, 16.44%), Tier 1B (91 leads, 16.48%), Tier 1F (266 leads, 12.78%)
--- Title Exclusions: Based on analysis of 72,055 historical leads
--- HV Wealth Tier: Based on analysis of 6,503 wealth-related leads (high-value-analysis.md)
+-- Version: V3.3.1_12312025_PORTABLE_BOOK_EXCLUSIONS
+-- 
+-- CHANGES FROM V3.2.4:
+--   - ADDED: Low discretionary AUM exclusion (<50% discretionary = 0.34x baseline)
+--   - ADDED: Large firm flag (>50 reps = 0.60x baseline, for V4 deprioritization)
+--   - ADDED: is_low_discretionary flag to output
+--   - VALIDATED: Servicer title exclusions confirmed (0.50x baseline)
+--   - NOT ADDED: Solo practitioner tier (only 0.98x - not significant)
+--   - NOT ADDED: Rainmaker title tier (actually 0.58x - WORSE than baseline!)
+--
+-- PORTABLE BOOK ANALYSIS RESULTS (December 2025):
+--   Key Finding: These signals work as EXCLUSION criteria, not inclusion.
+--   
+--   | Signal                  | Conversion | Lift   | Action        |
+--   |-------------------------|------------|--------|---------------|
+--   | Low Discretionary <50%  | 1.32%      | 0.34x  | EXCLUDE       |
+--   | Moderate Disc 50-80%    | 1.48%      | 0.39x  | MONITOR       |
+--   | Large Firm >50 reps     | 2.31%      | 0.60x  | DEPRIORITIZE  |
+--   | Servicer Titles         | 1.91%      | 0.50x  | EXCLUDE       |
+--   | Rainmaker Titles        | 2.23%      | 0.58x  | DO NOT ADD    |
+--   | Solo Practitioner       | 3.75%      | 0.98x  | NO ACTION     |
+--
+-- EXPECTED IMPACT:
+--   - Removes ~5,800 leads converting at 0.34x baseline
+--   - Improves overall lead pool quality by ~7-10%
+--   - No negative impact on high-performing tiers (validated <5% overlap)
+--
+-- PREVIOUS CHANGES (V3.2.4):
+--   - CFP and Series 65 certification tiers (Tier 1A/1B) - 4.3x lift
+--   - Data-driven title exclusion logic - removes 8.5% at 0% conversion
+--   - TIER_1F_HV_WEALTH_BLEEDER - 3.35x lift
+--   - PRODUCING_ADVISOR filter
+--   - Insurance exclusions
 -- =============================================================================
 
 CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.lead_scores_v3` AS
@@ -34,6 +56,25 @@ excluded_firms AS (
         -- V3.2.4: Insurance firm exclusions
         '%INSURANCE%'
     ]) AS pattern
+),
+
+-- V3.3.1: Firm discretionary ratio for portable book exclusion
+-- Analysis: Low discretionary (<50%) converts at 0.34x baseline - EXCLUDE
+-- High discretionary (>80%) converts at 0.92x baseline
+-- Source: Portable Book Hypothesis Validation Analysis (December 2025)
+firm_discretionary AS (
+    SELECT 
+        CRD_ID as firm_crd,
+        TOTAL_AUM,
+        DISCRETIONARY_AUM,
+        SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) as discretionary_ratio,
+        CASE 
+            WHEN TOTAL_AUM IS NULL OR TOTAL_AUM = 0 THEN 'UNKNOWN'
+            WHEN SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) < 0.50 THEN 'LOW_DISCRETIONARY'
+            WHEN SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) >= 0.80 THEN 'HIGH_DISCRETIONARY'
+            ELSE 'MODERATE_DISCRETIONARY'
+        END as discretionary_tier
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
 ),
 
 -- Base lead data with features
@@ -71,7 +112,9 @@ leads_with_flags AS (
                 SELECT 1 FROM excluded_firms ef 
                 WHERE lf.company_upper LIKE ef.pattern
             ) THEN 1 ELSE 0 
-        END as is_wirehouse
+        END as is_wirehouse,
+        -- V3.3.1: Large firm flag (for V4 deprioritization)
+        CASE WHEN lf.firm_rep_count_at_contact > 50 THEN 1 ELSE 0 END as is_large_firm
     FROM lead_features lf
 ),
 
@@ -80,6 +123,7 @@ leads_with_flags AS (
 lead_certifications AS (
     SELECT 
         l.lead_id,
+        c.PRIMARY_FIRM as firm_crd,
         
         -- CFP from CONTACT_BIO or TITLE_NAME (professional certification)
         CASE WHEN c.CONTACT_BIO LIKE '%CFP%' 
@@ -178,6 +222,7 @@ lead_certifications AS (
 -- Join certifications to leads
 -- V3.2.1 Update: Filter out excluded titles (data-driven, removes ~8.5% of leads)
 -- V3.2.3 Update: Filter to only producing advisors (PRODUCING_ADVISOR = TRUE)
+-- V3.3.1 Update: Add discretionary ratio join and exclusion filter
 leads_with_certs AS (
     SELECT 
         l.*,
@@ -185,11 +230,27 @@ leads_with_certs AS (
         COALESCE(cert.has_series_65_only, 0) as has_series_65_only,
         COALESCE(cert.has_series_7, 0) as has_series_7,
         COALESCE(cert.has_cfa, 0) as has_cfa,
-        COALESCE(cert.is_hv_wealth_title, 0) as is_hv_wealth_title
+        COALESCE(cert.is_hv_wealth_title, 0) as is_hv_wealth_title,
+        -- V3.3.1: Discretionary tier and flag
+        COALESCE(fd.discretionary_tier, 'UNKNOWN') as discretionary_tier,
+        COALESCE(fd.discretionary_ratio, -1) as discretionary_ratio,
+        CASE 
+            WHEN fd.discretionary_ratio < 0.50 AND fd.discretionary_ratio IS NOT NULL 
+            THEN 1 ELSE 0 
+        END as is_low_discretionary
     FROM leads_with_flags l
     INNER JOIN lead_certifications cert
         ON l.lead_id = cert.lead_id
+    LEFT JOIN firm_discretionary fd ON cert.firm_crd = fd.firm_crd
     WHERE COALESCE(cert.is_excluded_title, 0) = 0  -- Exclude leads with excluded titles
+      -- V3.3.1: Exclude low discretionary firms (0.34x baseline)
+      -- Allow NULL/Unknown - don't penalize missing data
+      AND (
+          fd.discretionary_ratio >= 0.50 
+          OR fd.discretionary_ratio IS NULL
+          OR fd.TOTAL_AUM IS NULL 
+          OR fd.TOTAL_AUM = 0
+      )
       -- Note: PRODUCING_ADVISOR = TRUE filter already applied in lead_certifications CTE
 ),
 
@@ -450,7 +511,12 @@ SELECT
     has_series_7,
     has_cfa,
     is_hv_wealth_title,
+    -- V3.3.1: Portable book signal flags
+    discretionary_tier,
+    discretionary_ratio,
+    is_low_discretionary,
+    is_large_firm,
     CURRENT_TIMESTAMP() as scored_at,
-    'V3.2.4_12232025_INSURANCE_EXCLUSIONS' as model_version
+    'V3.3.1_12312025_PORTABLE_BOOK_EXCLUSIONS' as model_version
 FROM tiered_leads
 ORDER BY priority_rank, expected_conversion_rate DESC, contacted_date DESC

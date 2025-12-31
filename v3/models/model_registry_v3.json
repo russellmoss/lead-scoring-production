@@ -1,10 +1,19 @@
 {
-  "model_id": "lead-scoring-v3.3.0",
-  "model_version": "V3.3.0_12302025_BLEEDING_SIGNAL_REFINEMENT",
+  "model_id": "lead-scoring-v3.3.1",
+  "model_version": "V3.3.1_12312025_PORTABLE_BOOK_EXCLUSIONS",
   "model_type": "rules-based-tiers",
   "status": "production",
   "created_date": "2025-12-21",
-  "updated_date": "2025-12-30",
+  "updated_date": "2025-12-31",
+  "changes_from_v3.3.0": [
+    "ADDED: Low discretionary AUM exclusion - firms with <50% discretionary AUM excluded (0.34x baseline)",
+    "ADDED: Large firm flag (>50 reps) for V4 deprioritization (0.60x baseline)",
+    "VALIDATED: Servicer title exclusions confirmed working (0.50x baseline)",
+    "NOT ADDED: Solo practitioner tier - only 0.98x lift, not significant",
+    "NOT ADDED: Rainmaker title tier - actually 0.58x lift (WORSE than producers)",
+    "ANALYSIS: Portable Book Hypothesis Validation (December 2025)",
+    "EXPECTED IMPACT: Removes ~5,800 leads at 0.34x, improves pool quality by 7-10%"
+  ],
   "changes_from_v3.2.4": [
     "REMOVED: TIER_5_HEAVY_BLEEDER - Analysis showed 3.27% conversion (BELOW 3.82% baseline)",
     "UPDATED: Firm departures now use inferred approach (START_DATE at new firm) for 60-90 days fresher signal",

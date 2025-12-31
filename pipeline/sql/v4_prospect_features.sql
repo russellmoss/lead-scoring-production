@@ -390,6 +390,8 @@ all_features AS (
 
         -- GROUP 4: FIRM STABILITY FEATURES
         COALESCE(fs.firm_rep_count_at_contact, 0) as firm_rep_count_at_contact,
+        -- V3.3.1: Large firm flag for deprioritization (>50 reps = 0.60x baseline)
+        CASE WHEN COALESCE(fs.firm_rep_count_at_contact, 0) > 50 THEN 1 ELSE 0 END as is_large_firm,
         COALESCE(fs.firm_arrivals_12mo, 0) - COALESCE(fs.firm_departures_12mo, 0) as firm_net_change_12mo,
         CASE
             WHEN cf.firm_crd IS NULL THEN 'Unknown'

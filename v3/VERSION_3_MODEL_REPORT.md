@@ -92,6 +92,84 @@ Analysis of the bleeding signal revealed critical insights:
 
 ---
 
+## V3.3.1 Portable Book Signal Analysis (December 2025)
+
+**Release Date:** December 31, 2025
+
+### Hypothesis Validation
+
+We tested four hypotheses about portable book signals:
+
+#### Hypothesis 1: Solo-Practitioner Proxy
+- **Theory:** Advisors at firms with 1-3 reps OWN the book entirely
+- **Result:** ⚠️ WEAK SIGNAL
+  - Solo (1 rep): 3.75% conversion (0.98x baseline)
+  - Large firms (50+ reps): 2.31% conversion (0.60x baseline)
+- **Action:** Do NOT add Solo tier; ADD large firm as V4 negative feature
+
+#### Hypothesis 2: Discretionary AUM Ratio
+- **Theory:** >80% discretionary = more portable relationships
+- **Result:** ✅ VALIDATED AS EXCLUSION
+  - Low discretionary (<50%): 1.32% conversion (0.34x baseline) - EXCLUDE
+  - Moderate (50-80%): 1.48% conversion (0.39x baseline)
+  - High (80-95%): 3.52% conversion (0.92x baseline)
+- **Action:** EXCLUDE leads at firms with <50% discretionary AUM
+
+#### Hypothesis 3: Custodian Signal
+- **Theory:** Schwab/Fidelity/Pershing = easier transitions
+- **Result:** ❌ DATA QUALITY ISSUE
+  - 0 leads matched portable custodian criteria
+  - Custodian field values need investigation
+- **Action:** DEFERRED pending data quality fix
+
+#### Hypothesis 4: Rainmaker vs Servicer Titles
+- **Theory:** Founders/Partners own books; Associates don't
+- **Result:** ❌ INVERTED
+  - Producers: 2.73% conversion (0.71x baseline)
+  - Rainmakers: 2.23% conversion (0.58x baseline) - WORSE!
+  - Servicers: 1.91% conversion (0.50x baseline)
+- **Action:** Confirm Servicer exclusion; Do NOT add Rainmaker tier
+
+### Why Rainmakers Convert Worse
+
+The hypothesis that Founders/Principals/Partners would convert better was logical but incorrect:
+
+1. **Already successful** - They've built their ideal practice; why change?
+2. **Equity-locked** - Partnership agreements create golden handcuffs
+3. **Succession mindset** - Planning exit, not growth
+4. **Our sweet spot is mid-career** - Ambitious producers building toward ownership
+
+This validates our existing model's focus on **mobility + bleeding firms** over seniority/ownership titles.
+
+### Implementation
+
+**Exclusion Added:**
+```sql
+AND (discretionary_ratio >= 0.50 OR discretionary_ratio IS NULL)
+```
+
+**V4 Feature Added:**
+```sql
+CASE WHEN firm_rep_count_at_contact > 50 THEN 1 ELSE 0 END as is_large_firm
+```
+
+### Business Impact
+
+| Metric | Before V3.3.1 | After V3.3.1 | Change |
+|--------|---------------|--------------|--------|
+| Total Lead Pool | ~35,000 | ~29,200 | -17% |
+| Avg Pool Conversion | 3.82% | ~4.1% (est) | +7% |
+| Low-Quality Leads Removed | 0 | ~5,800 | - |
+
+### Key Learnings
+
+1. **Invert your thinking:** These signals work for EXCLUSION, not INCLUSION
+2. **Rainmaker paradox:** Senior/owner titles convert WORSE - they're already successful
+3. **Mid-career sweet spot:** Our model correctly targets mobility + bleeding, not seniority
+4. **Data quality matters:** Custodian analysis blocked by data issues
+
+---
+
 ### Why Version-3 Exists
 
 Version-2 used machine learning (XGBoost) but achieved only 1.50x lift, falling short of the 2.62x target. Version-3 was built to:
