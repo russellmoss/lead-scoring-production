@@ -2003,7 +2003,7 @@ scikit-learn>=1.1.0
 **Owner**: Data Science Team
 
 **Change Log**:
-- **2025-12-30**: Initial validation and enhancement
+- **2025-12-30 v2.0**: Initial validation and enhancement
   - Validated all BigQuery queries against actual schemas
   - Corrected table/column names (OUTLET vs SOURCE, RIA_CONTACT_ID vs RIA_CONTACT_CRD_ID)
   - Added actual coverage percentages from BigQuery
@@ -2012,4 +2012,9 @@ scikit-learn>=1.1.0
   - Integrated ExecutionLogger from v3/utils
   - Added edge case handling and failure modes
   - Created executable checklist
+- **2025-12-30 v2.1**: Orchestration and report generation
   - Added Enhancement Validation Orchestrator script for automated report generation
+  - Added comprehensive setup and usage instructions
+  - Added Cursor.ai prompt for agentic execution
+  - Added quick reference gate definitions table
+  - Added troubleshooting guide for common issues
