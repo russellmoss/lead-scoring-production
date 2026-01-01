@@ -19,7 +19,7 @@
 -- - NEVER use *_current tables for calculations (except null indicators)
 -- ============================================================================
 
-CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.v4_features_pit_v41` AS
+CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.v4_features_pit_v42` AS
 
 WITH 
 -- ============================================================================
@@ -412,6 +412,105 @@ firm_rep_type_features AS (
 ),
 
 -- ============================================================================
+-- FEATURE GROUP 7: CAREER CLOCK FEATURES (V4.2.0)
+-- ============================================================================
+-- PIT-safe: Only uses completed employment records with END_DATE < contacted_date
+-- These features capture individual advisor career timing patterns
+-- 
+-- KEY FINDINGS:
+-- - 20% of advisors have predictable patterns (CV < 0.3)
+-- - "In Window" advisors convert at 10-16% (vs 3% baseline)
+-- - "Too Early" advisors convert at 3.14% (deprioritization signal)
+-- ============================================================================
+
+career_clock_raw AS (
+    SELECT 
+        b.lead_id,
+        b.advisor_crd,
+        b.contacted_date,
+        eh.PREVIOUS_REGISTRATION_COMPANY_CRD_ID as prior_firm_crd,
+        eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE as prior_start,
+        eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE as prior_end,
+        DATE_DIFF(
+            eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+            eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+            MONTH
+        ) as prior_tenure_months
+    FROM base b
+    INNER JOIN `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history` eh
+        ON b.advisor_crd = eh.RIA_CONTACT_CRD_ID
+    WHERE eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
+      AND eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE IS NOT NULL
+      -- PIT CRITICAL: Only completed jobs BEFORE contact date
+      AND eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE < b.contacted_date
+      -- Valid tenure (> 0 months)
+      AND DATE_DIFF(eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                    eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE, MONTH) > 0
+),
+
+career_clock_stats AS (
+    SELECT
+        lead_id,
+        advisor_crd,
+        contacted_date,
+        COUNT(*) as completed_jobs,
+        AVG(prior_tenure_months) as avg_prior_tenure_months,
+        STDDEV(prior_tenure_months) as tenure_stddev,
+        SAFE_DIVIDE(STDDEV(prior_tenure_months), AVG(prior_tenure_months)) as tenure_cv,
+        MIN(prior_tenure_months) as min_prior_tenure,
+        MAX(prior_tenure_months) as max_prior_tenure
+    FROM career_clock_raw
+    GROUP BY lead_id, advisor_crd, contacted_date
+    HAVING COUNT(*) >= 2  -- Need 2+ completed jobs to detect pattern
+),
+
+career_clock_features AS (
+    SELECT
+        cf.lead_id,
+        cf.contacted_date,
+        cf.tenure_months as current_tenure_months,
+        
+        -- Raw stats (for model to learn from)
+        COALESCE(ccs.completed_jobs, 0) as cc_completed_jobs,
+        ccs.avg_prior_tenure_months as cc_avg_prior_tenure_months,
+        ccs.tenure_cv as cc_tenure_cv,
+        
+        -- Percent through personal cycle
+        SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months) as cc_pct_through_cycle,
+        
+        -- Boolean flags (encoded as INT for XGBoost)
+        CASE
+            WHEN ccs.tenure_cv < 0.3 THEN 1
+            ELSE 0
+        END as cc_is_clockwork,
+        
+        CASE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN 1
+            ELSE 0
+        END as cc_is_in_move_window,
+        
+        CASE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months) < 0.7
+            THEN 1
+            ELSE 0
+        END as cc_is_too_early,
+        
+        -- Months until move window (for continuous signal)
+        CASE
+            WHEN ccs.tenure_cv < 0.5 AND ccs.avg_prior_tenure_months IS NOT NULL
+            THEN GREATEST(0, CAST(ccs.avg_prior_tenure_months * 0.7 - cf.tenure_months AS INT64))
+            ELSE NULL
+        END as cc_months_until_window
+        
+    FROM current_firm cf
+    LEFT JOIN career_clock_stats ccs 
+        ON cf.lead_id = ccs.lead_id
+),
+
+-- ============================================================================
 -- COMBINE ALL FEATURES
 -- ============================================================================
 all_features AS (
@@ -550,7 +649,19 @@ all_features AS (
         COALESCE(frt.is_independent_ria, 0) as is_independent_ria,
         COALESCE(frt.is_ia_rep_type, 0) as is_ia_rep_type,
         COALESCE(frt.is_dual_registered, 0) as is_dual_registered,
-        COALESCE(frt.independent_ria_x_ia_rep, 0) as independent_ria_x_ia_rep
+        COALESCE(frt.independent_ria_x_ia_rep, 0) as independent_ria_x_ia_rep,
+        
+        -- ====================================================================
+        -- GROUP 7: CAREER CLOCK FEATURES (V4.2.0)
+        -- ====================================================================
+        -- NOTE: cc_avg_prior_tenure_months is calculated in CTE but NOT included as feature (redundant with cc_pct_through_cycle)
+        COALESCE(ccf.cc_completed_jobs, 0) as cc_completed_jobs,
+        COALESCE(ccf.cc_tenure_cv, 1.0) as cc_tenure_cv,  -- Default 1.0 = unpredictable
+        COALESCE(ccf.cc_pct_through_cycle, 1.0) as cc_pct_through_cycle,
+        COALESCE(ccf.cc_is_clockwork, 0) as cc_is_clockwork,
+        COALESCE(ccf.cc_is_in_move_window, 0) as cc_is_in_move_window,
+        COALESCE(ccf.cc_is_too_early, 0) as cc_is_too_early,
+        COALESCE(ccf.cc_months_until_window, 999) as cc_months_until_window  -- 999 = unknown
         
     FROM base b
     LEFT JOIN current_firm cf ON b.lead_id = cf.lead_id
@@ -564,6 +675,7 @@ all_features AS (
     LEFT JOIN recent_mover_pit rm ON b.lead_id = rm.lead_id
     LEFT JOIN bleeding_velocity_pit bv ON b.lead_id = bv.lead_id
     LEFT JOIN firm_rep_type_features frt ON b.lead_id = frt.lead_id
+    LEFT JOIN career_clock_features ccf ON cf.lead_id = ccf.lead_id
 )
 
 SELECT DISTINCT * FROM all_features;

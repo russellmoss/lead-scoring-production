@@ -1,0 +1,20 @@
+{
+  "version": "v4.2.0",
+  "created": "2026-01-01T12:44:08.500134",
+  "metrics": {
+    "train_auc": 0.7217052042326338,
+    "test_auc": 0.6258042806549666,
+    "test_aucpr": 0.053140775121837486,
+    "auc_gap": 0.09590092357766722,
+    "top_decile_lift": 1.8731229166666667,
+    "bottom_20_rate": 0.011656952539550375,
+    "best_iteration": 472
+  },
+  "comparison_to_v41": {
+    "test_auc_change": 0.0060042806549666095,
+    "top_decile_lift_change": -0.15687708333333306,
+    "bottom_20_rate_change": -0.0023430474604496255
+  },
+  "scale_pos_weight": 40.99320882852292,
+  "feature_count": 29
+}

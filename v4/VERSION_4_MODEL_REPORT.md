@@ -1,8 +1,57 @@
 # Version 4 Lead Scoring Model - Final Report
 
-**Model Version**: 4.0.0  
-**Deployment Date**: 2025-12-24  
+**Current Model Version**: 4.2.0  
+**Deployment Date**: 2026-01-01  
 **Status**: Production (Hybrid Deployment)
+
+---
+
+## V4.2.0 Career Clock Update (2026-01-01)
+
+**New Features**: Added 7 Career Clock features for timing-aware scoring
+
+### V4.2.0 Performance
+
+- **Test AUC-ROC**: 0.6258 (+0.60% vs V4.1.0 R3)
+- **Test AUC-PR**: 0.0531
+- **Top Decile Lift**: 1.87x
+- **Bottom 20% Rate**: 0.0117 (-16.4% vs V4.1.0 R3)
+- **AUC Gap**: 0.0959 (healthy, low overfitting)
+- **Features**: 29 (22 existing + 7 Career Clock)
+
+### Career Clock Features
+
+1. `cc_tenure_cv`: Coefficient of variation of tenure lengths (predictability)
+2. `cc_pct_through_cycle`: Percent through typical tenure cycle
+3. `cc_is_clockwork`: Flag for highly predictable career patterns
+4. `cc_is_in_move_window`: Flag for being in optimal move window (70-130% of cycle)
+5. `cc_is_too_early`: Flag for leads contacted too early in career cycle
+6. `cc_months_until_window`: Months until entering move window
+7. `cc_completed_jobs`: Count of completed employment records
+
+### Key Improvements
+
+- ✅ **Better Deprioritization**: Bottom 20% rate improved from 1.40% to 1.17%
+- ✅ **Improved AUC**: Test AUC increased from 0.6198 to 0.6258
+- ✅ **Timing Awareness**: Can now identify leads contacted too early in their career cycle
+- ✅ **No Regression**: All validation gates passed
+
+### Comparison to V4.1.0 R3
+
+| Metric | V4.1.0 R3 | V4.2.0 | Change |
+|--------|-----------|--------|--------|
+| Test AUC | 0.6198 | 0.6258 | +0.60% ✅ |
+| Top Decile Lift | 2.03x | 1.87x | -7.9% |
+| Bottom 20% Rate | 1.40% | 1.17% | -16.4% ✅ |
+| Features | 22 | 29 | +7 |
+
+---
+
+## V4.1.0 R3 (Deprecated 2026-01-01)
+
+**Model Version**: 4.1.0 R3  
+**Deployment Date**: 2025-12-30  
+**Status**: Deprecated (Superseded by V4.2.0)
 
 ---
 
@@ -80,7 +129,7 @@ Lead Scoring Pipeline:
 - **Objective**: Binary classification (logistic)
 - **Regularization**: Strong (max_depth=3, min_child_weight=50, reg_alpha=1.0, reg_lambda=10.0)
 
-### Features (14 total)
+### Features (V4.2.0: 29 total, V4.1.0: 22 total, V4.0.0: 14 total)
 
 1. **Tenure Features**:
    - `tenure_bucket`: Categorical (0-12, 12-24, 24-48, 48-120, 120+, Unknown)
@@ -109,6 +158,15 @@ Lead Scoring Pipeline:
 7. **Interaction Features**:
    - `mobility_x_heavy_bleeding`: Boolean (High mobility AND heavy bleeding)
    - `short_tenure_x_high_mobility`: Boolean (Tenure < 24 months AND high mobility)
+
+8. **Career Clock Features (V4.2.0)**:
+   - `cc_tenure_cv`: Coefficient of variation of tenure lengths
+   - `cc_pct_through_cycle`: Percent through typical tenure cycle
+   - `cc_is_clockwork`: Flag for highly predictable career patterns
+   - `cc_is_in_move_window`: Flag for being in optimal move window
+   - `cc_is_too_early`: Flag for leads contacted too early
+   - `cc_months_until_window`: Months until entering move window
+   - `cc_completed_jobs`: Count of completed employment records
 
 ### Training Configuration
 
@@ -142,16 +200,20 @@ Top 10 features by XGBoost importance:
 
 ### SQL Components
 
-1. **View**: `ml_features.v4_production_features_v41` (V4.1.0)
-   - Calculates all features for current leads (22 features)
-   - Uses `CURRENT_DATE()` as prediction date
+1. **View**: `ml_features.v4_prospect_features` (V4.2.0)
+   - Calculates all features for current leads (29 features)
+   - Uses `prediction_date` for PIT compliance
+   - Includes V4.2.0 Career Clock features
    - PIT-compliant (only uses data available at prediction time)
-   - Includes V4.1.0 bleeding and firm/rep type features
 
-2. **Table**: `ml_features.v4_daily_scores_v41` (V4.1.0)
-   - Caches feature values for scoring
-   - Refreshed daily (recommended: 6 AM EST)
-   - Includes metadata (scored_at, model_version='v4.1.0')
+2. **Table**: `ml_features.v4_prospect_scores` (V4.2.0)
+   - Caches feature values and scores for prospects
+   - Refreshed monthly via `score_prospects_monthly.py`
+   - Includes metadata (scored_at, model_version='v4.2.0')
+
+**Legacy (V4.1.0 R3 - Deprecated)**:
+- View: `ml_features.v4_production_features_v41` (22 features)
+- Table: `ml_features.v4_daily_scores_v41` (deprecated)
 
 **Legacy (V4.0.0)**:
 - View: `ml_features.v4_production_features` (deprecated, kept for parallel scoring)

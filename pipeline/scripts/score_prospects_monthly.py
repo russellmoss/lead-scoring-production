@@ -1,16 +1,16 @@
 """
-Score all prospects with V4.1.0 model and generate SHAP-based narratives.
+Score all prospects with V4.2.0 model and generate SHAP-based narratives.
 Run monthly BEFORE lead list generation.
 
-VERSION: V4.1.0 R3
-UPDATED: 2025-12-30
+VERSION: V4.2.0
+UPDATED: 2026-01-01
 
-CHANGES FROM V4.0.0:
-- Model upgraded to V4.1.0 R3 (0.620 AUC, 2.03x lift)
-- Features increased from 14 to 22
-- Added bleeding signal features
-- Added firm/rep type features
-- Improved SHAP interpretability
+CHANGES FROM V4.1.0 R3:
+- Model upgraded to V4.2.0 (0.626 AUC, 1.87x lift)
+- Features increased from 22 to 29
+- Added Career Clock features (7 new features)
+- Improved deprioritization of "too early" leads
+- Better timing-aware scoring
 
 Working Directory: pipeline
 Usage: python scripts/score_prospects_monthly.py
@@ -30,17 +30,13 @@ import shap
 # PATH CONFIGURATION
 # ============================================================================
 WORKING_DIR = Path(r"C:\Users\russe\Documents\lead_scoring_production\pipeline")
-# Updated for V4.1.0 deployment (2025-12-30)
-# Try R3 directory first, fallback to v4.1.0
-V4_MODEL_DIR_R3 = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\models\v4.1.0_r3")
-V4_MODEL_DIR = V4_MODEL_DIR_R3 if (V4_MODEL_DIR_R3 / "model.pkl").exists() or (V4_MODEL_DIR_R3 / "model.json").exists() else Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\models\v4.1.0")
-V4_FEATURES_FILE_R3 = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\data\v4.1.0_r3\final_features.json")
-V4_FEATURES_FILE = V4_FEATURES_FILE_R3 if V4_FEATURES_FILE_R3.exists() else Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\data\v4.1.0\final_features.json")
+# Updated for V4.2.0 deployment (2026-01-01)
+# V4.2.0 Career Clock model
+V4_MODEL_DIR = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\models\v4.2.0")
+V4_FEATURES_FILE = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\data\v4.2.0\final_features.json")
 
 # Calibrator (optional - for monotonic percentile ranking)
-# Try R3 directory first, fallback to v4.1.0
-V4_CALIBRATOR_FILE_R3 = Path(r"C:\Users\russe\Documents\lead_scoring_production\v4\models\v4.1.0_r3\isotonic_calibrator.pkl")
-V4_CALIBRATOR_FILE = V4_CALIBRATOR_FILE_R3 if V4_CALIBRATOR_FILE_R3.exists() else V4_MODEL_DIR / "isotonic_calibrator.pkl"
+V4_CALIBRATOR_FILE = V4_MODEL_DIR / "isotonic_calibrator.pkl"
 
 EXPORTS_DIR = WORKING_DIR / "exports"
 LOGS_DIR = WORKING_DIR / "logs"
@@ -169,6 +165,42 @@ FEATURE_DESCRIPTIONS = {
         'name': 'Dual Registered',
         'positive': 'dual-registered (both IA and BD), higher mobility potential',
         'negative': 'not dual-registered'
+    },
+    # NEW V4.2.0: Career Clock features
+    'cc_tenure_cv': {
+        'name': 'Career Clock Predictability',
+        'positive': 'has a predictable career pattern (consistent tenure lengths)',
+        'negative': 'has unpredictable career timing'
+    },
+    'cc_pct_through_cycle': {
+        'name': 'Percent Through Career Cycle',
+        'positive': 'is approaching their typical tenure duration',
+        'negative': 'is early in their typical tenure cycle'
+    },
+    'cc_is_clockwork': {
+        'name': 'Clockwork Career Pattern',
+        'positive': 'has a highly predictable career clock (changes firms at consistent intervals)',
+        'negative': 'has variable career timing'
+    },
+    'cc_is_in_move_window': {
+        'name': 'In Move Window',
+        'positive': 'is currently in their personal "move window" (70-130% through typical tenure)',
+        'negative': 'is not yet in their move window'
+    },
+    'cc_is_too_early': {
+        'name': 'Too Early for Outreach',
+        'positive': 'should be contacted later (too early in career cycle)',
+        'negative': 'timing is appropriate for outreach'
+    },
+    'cc_months_until_window': {
+        'name': 'Months Until Move Window',
+        'positive': 'will enter move window soon',
+        'negative': 'move window is far away'
+    },
+    'cc_completed_jobs': {
+        'name': 'Completed Jobs Count',
+        'positive': 'has career history data for pattern detection',
+        'negative': 'limited career history data'
     }
 }
 

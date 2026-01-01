@@ -1,0 +1,85 @@
+{
+  "version": "v4.2.0",
+  "created": "2026-01-01",
+  "feature_count": 29,
+  "previous_version": "v4.1.0_r3",
+  "added_features": [
+    "cc_tenure_cv",
+    "cc_pct_through_cycle",
+    "cc_is_clockwork",
+    "cc_is_in_move_window",
+    "cc_is_too_early",
+    "cc_months_until_window",
+    "cc_completed_jobs"
+  ],
+  "final_features": [
+    "tenure_months",
+    "mobility_3yr",
+    "firm_rep_count_at_contact",
+    "firm_net_change_12mo",
+    "is_wirehouse",
+    "is_broker_protocol",
+    "has_email",
+    "has_linkedin",
+    "has_firm_data",
+    "mobility_x_heavy_bleeding",
+    "short_tenure_x_high_mobility",
+    "experience_years",
+    "tenure_bucket_encoded",
+    "mobility_tier_encoded",
+    "firm_stability_tier_encoded",
+    "is_recent_mover",
+    "days_since_last_move",
+    "firm_departures_corrected",
+    "bleeding_velocity_encoded",
+    "is_independent_ria",
+    "is_ia_rep_type",
+    "is_dual_registered",
+    "cc_tenure_cv",
+    "cc_pct_through_cycle",
+    "cc_is_clockwork",
+    "cc_is_in_move_window",
+    "cc_is_too_early",
+    "cc_months_until_window",
+    "cc_completed_jobs"
+  ],
+  "removed_features": [
+    "industry_tenure_months",
+    "tenure_bucket_x_mobility",
+    "independent_ria_x_ia_rep",
+    "recent_mover_x_bleeding"
+  ],
+  "categorical_mappings": {
+    "tenure_bucket": {
+      "0": "0-12",
+      "1": "12-24",
+      "2": "120+",
+      "3": "24-48",
+      "4": "48-120",
+      "5": "Unknown"
+    },
+    "mobility_tier": {
+      "0": "High_Mobility",
+      "1": "Low_Mobility",
+      "2": "Stable"
+    },
+    "firm_stability_tier": {
+      "0": "Growing",
+      "1": "Heavy_Bleeding",
+      "2": "Light_Bleeding",
+      "3": "Stable",
+      "4": "Unknown"
+    }
+  },
+  "feature_groups": {
+    "tenure": ["tenure_months", "tenure_bucket_encoded"],
+    "experience": ["experience_years"],
+    "mobility": ["mobility_3yr", "mobility_tier_encoded", "is_recent_mover", "days_since_last_move"],
+    "firm_stability": ["firm_net_change_12mo", "firm_departures_corrected", "bleeding_velocity_encoded", "firm_rep_count_at_contact", "firm_stability_tier_encoded"],
+    "firm_type": ["is_wirehouse", "is_broker_protocol", "is_independent_ria", "is_ia_rep_type", "is_dual_registered"],
+    "data_quality": ["has_email", "has_linkedin", "has_firm_data"],
+    "interactions": ["short_tenure_x_high_mobility", "mobility_x_heavy_bleeding"],
+    "career_clock": ["cc_tenure_cv", "cc_pct_through_cycle", "cc_is_clockwork", "cc_is_in_move_window", "cc_is_too_early", "cc_months_until_window", "cc_completed_jobs"]
+  },
+  "notes": "V4.2.0 adds Career Clock features to capture individual advisor timing patterns. Expected improvement: better deprioritization of 'too early' leads. NOTE: cc_avg_prior_tenure_months is calculated in CTEs but excluded from model features (redundant with cc_pct_through_cycle)."
+}

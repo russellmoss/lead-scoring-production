@@ -1,8 +1,9 @@
 # Lead Scoring Production Pipeline - Hybrid V3 + V4 Model
 
 **Version**: 3.1 (Option C: Maximized Lead List)  
-**Last Updated**: December 30, 2025  
+**Last Updated**: January 1, 2026  
 **Status**: Production Ready  
+**V4 Model**: V4.2.0 (Career Clock) - Deployed January 1, 2026  
 **Repository Cleanup**: Completed December 30, 2025 (see `recommended_cleanup.md`)
 
 ---
@@ -55,10 +56,10 @@ This repository contains a **hybrid lead scoring system** that combines:
 Before starting, ensure you have:
 
 - ✅ Access to BigQuery project: `savvy-gtm-analytics`
-- ✅ V4.1.0 model files in `v4/models/v4.1.0/`:
+- ✅ V4.2.0 model files in `v4/models/v4.2.0/`:
   - `model.pkl` (trained XGBoost model)
   - `model.json` (model configuration)
-  - `final_features.json` (22 features)
+  - `final_features.json` (29 features including Career Clock)
 - ✅ Python environment with required packages:
   ```bash
   pip install xgboost pandas google-cloud-bigquery shap numpy
@@ -102,7 +103,7 @@ python scripts/export_lead_list.py
 │  STEP 1: Calculate V4 Features                                  │
 │     └─> SQL: v4_prospect_features.sql                           │
 │     └─> Output: ml_features.v4_prospect_features                │
-│     └─> Purpose: Calculate 22 ML features for all prospects (V4.1.0) │
+│     └─> Purpose: Calculate 29 ML features for all prospects (V4.2.0 Career Clock) │
 │                                                                  │
 │  STEP 2: Score Prospects with V4 Model                         │
 │     └─> Python: score_prospects_monthly.py                      │
@@ -150,7 +151,7 @@ Salesforce Import File
 
 ### Step 1: Calculate V4 Features for All Prospects
 
-**Purpose**: Calculate the 22 features required by the V4.1.0 XGBoost model for all producing advisors in FINTRX.
+**Purpose**: Calculate the 29 features required by the V4.2.0 XGBoost model (including 7 Career Clock features) for all producing advisors in FINTRX.
 
 **File**: `pipeline/sql/v4_prospect_features.sql`
 
@@ -191,8 +192,8 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_features`;
 **File**: `pipeline/scripts/score_prospects_monthly.py`
 
 **What It Does**:
-1. Loads V4.1.0 XGBoost model from `v4/models/v4.1.0/model.pkl`
-2. Fetches features from `ml_features.v4_prospect_features` (22 features)
+1. Loads V4.2.0 XGBoost model from `v4/models/v4.2.0/model.pkl`
+2. Fetches features from `ml_features.v4_prospect_features` (29 features including Career Clock)
 3. Generates predictions (0-1 probability scores)
 4. Calculates percentile ranks (1-100)
 5. Identifies deprioritize candidates (bottom 20%)
@@ -785,14 +786,32 @@ Based on XGBoost feature importance (gain-based):
 
 ---
 
-## V4.1.0 R3 Model - Production (Deployed 2025-12-30)
+## V4.2.0 Career Clock Model - Production (Deployed 2026-01-01)
 
 ### Executive Summary
 
-V4.1.0 R3 represents a significant upgrade to our lead scoring ML model, achieving:
+V4.2.0 adds Career Clock features for timing-aware lead scoring, achieving:
 
-| Metric | V4.0.0 (Previous) | V4.1.0 R3 (Current) | Improvement |
-|--------|-------------------|---------------------|-------------|
+| Metric | V4.1.0 R3 (Previous) | V4.2.0 (Current) | Improvement |
+|--------|---------------------|------------------|-------------|
+| **Test AUC-ROC** | 0.6198 | **0.6258** | **+0.60%** |
+| **Top Decile Lift** | 2.03x | **1.87x** | -7.9% |
+| **Bottom 20% Rate** | 1.40% | **1.17%** | **-16.4%** ✅ |
+| **Features** | 22 | **29** | +7 Career Clock features |
+| **Career Clock** | None | **7 timing features** | ✅ New capability |
+
+**Key Improvement**: Better deprioritization of "too early" leads (-16.4% bottom 20% rate)
+
+---
+
+## V4.1.0 R3 Model - Deprecated (2026-01-01)
+
+**Status**: Deprecated (Superseded by V4.2.0)
+
+### Historical Performance
+
+| Metric | V4.0.0 (Previous) | V4.1.0 R3 | Improvement |
+|--------|-------------------|-----------|-------------|
 | **Test AUC-ROC** | 0.599 | **0.620** | **+3.5%** |
 | **Top Decile Lift** | 1.51x | **2.03x** | **+34.4%** |
 | **Test AUC-PR** | 0.043 | **0.070** | **+62.8%** |
@@ -808,20 +827,23 @@ V4.1.0 R3 represents a significant upgrade to our lead scoring ML model, achievi
 **Purpose**: Single source of truth for all model versions (V3 and V4)
 
 **Current Production Models**:
-- **V3.3.0**: Rules-based tiered classification (prioritization)
+- **V3.4.0**: Rules-based tiered classification (prioritization) with Career Clock tiers
   - Registry: `v3/models/model_registry_v3.json`
   - Documentation: `v3/VERSION_3_MODEL_REPORT.md`
   - Production SQL: `v3/sql/generate_lead_list_v3.3.0.sql`
-- **V4.1.0 R3**: XGBoost ML model (deprioritization)
+  - Career Clock Tiers: TIER_0A/0B/0C (Prime Mover Due, Small Firm Due, Clockwork Due)
+- **V4.2.0**: XGBoost ML model (deprioritization) with Career Clock features
   - Registry: `v4/models/registry.json`
   - Documentation: `v4/VERSION_4_MODEL_REPORT.md`
-  - Production SQL: `v4/sql/production_scoring_v41.sql`
-  - Inference Script: `v4/inference/lead_scorer_v4.py`
+  - Production SQL: `pipeline/sql/v4_prospect_features.sql`
+  - Inference Script: `pipeline/scripts/score_prospects_monthly.py`
+  - Career Clock Features: 7 timing-aware features
 
 **Deprecated Models** (archived):
 - V4.0.0 → `archive/v4/models/v4.0.0/`
 - V4.1.0 → `archive/v4/models/v4.1.0/`
 - V4.1.0 R2 → `archive/v4/models/v4.1.0_r2/`
+- V4.1.0 R3 → Deprecated 2026-01-01 (superseded by V4.2.0)
 
 **Documentation**:
 - Model Evolution: `MODEL_EVOLUTION_HISTORY.md`
@@ -918,11 +940,12 @@ Lift by Decile:
 #### Model Files
 | File | Path | Description |
 |------|------|-------------|
-| Model (pickle) | `v4/models/v4.1.0/model.pkl` | Trained XGBoost model |
-| Model (JSON) | `v4/models/v4.1.0/model.json` | Model JSON format |
-| Features | `v4/data/v4.1.0/final_features.json` | 22 feature list |
-| Hyperparameters | `v4/models/v4.1.0/hyperparameters.json` | Training config |
-| Feature importance | `v4/models/v4.1.0/feature_importance.csv` | SHAP + XGBoost importance |
+| Model (pickle) | `v4/models/v4.2.0/model.pkl` | Trained XGBoost model |
+| Model (JSON) | `v4/models/v4.2.0/model.json` | Model JSON format |
+| Features | `v4/data/v4.2.0/final_features.json` | 29 feature list (22 + 7 Career Clock) |
+| Hyperparameters | `v4/models/v4.2.0/hyperparameters.json` | Training config |
+| Feature importance | `v4/models/v4.2.0/feature_importance.csv` | XGBoost importance |
+| Training metrics | `v4/models/v4.2.0/training_metrics.json` | Performance metrics |
 
 #### Pipeline Files
 | File | Path | Description |
@@ -975,7 +998,8 @@ Lift by Decile:
 | Version | Date | Changes |
 |---------|------|---------|
 | V3.3.1 | 2025-12-31 | Portable Book Signal Exclusions - Low discretionary AUM exclusion, large firm flag |
-| V4.1.0 R3 | 2025-12-30 | Production deployment - 22 features, 0.620 AUC, 2.03x lift |
+| V4.2.0 | 2026-01-01 | Career Clock deployment - 29 features, 0.626 AUC, improved deprioritization |
+| V4.1.0 R3 | 2025-12-30 | Deprecated 2026-01-01 - 22 features, 0.620 AUC, 2.03x lift |
 | V4.1.0 R2 | 2025-12-30 | Added regularization - overfitting controlled |
 | V4.1.0 R1 | 2025-12-30 | Initial V4.1 training - 26 features |
 | V4.0.0 | 2025-12-15 | Original ML model - 14 features, 0.599 AUC |
@@ -1744,7 +1768,8 @@ lead_scoring_production/
 │   ├── scripts/
 │   └── reports/
 ├── v4/                                # V4 XGBoost ML model
-│   ├── models/v4.1.0/                 # V4.1.0 R3 (current production)
+│   ├── models/v4.2.0/                 # V4.2.0 Career Clock (current production)
+│   ├── models/v4.1.0_r3/             # V4.1.0 R3 (deprecated 2026-01-01)
 │   │   ├── model.pkl                  # Trained model
 │   │   ├── model.json                 # Model config
 │   │   └── feature_importance.csv     # Feature importance

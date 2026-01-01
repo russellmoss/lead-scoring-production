@@ -1,10 +1,10 @@
 # Version 3 Lead Scoring Model - Comprehensive Technical Report
 
-**Model Version:** V3.3.0_12302025_BLEEDING_SIGNAL_REFINEMENT  
+**Model Version:** V3.4.0_01012026_CAREER_CLOCK  
 **Original Development Date:** December 21, 2025  
-**Last Updated:** December 30, 2025 (V3.3: Bleeding signal refinement based on conversion analysis)  
+**Last Updated:** January 1, 2026 (V3.4.0: Career Clock feature - individual advisor timing patterns)  
 **Base Directory:** `Version-3/`  
-**Status:** ✅ Production Ready (V3.3.0 with Inferred Departures + Bleeding Velocity + TIER_3A + TIER_5 Removed)
+**Status:** ✅ Production Ready (V3.4.0 with Career Clock tiers achieving 16.13% conversion)
 
 ---
 
@@ -455,6 +455,111 @@ THEN 'TIER_1G_GROWTH_STAGE'
 - `v3/sql/phase_4_v3_tiered_scoring.sql` - Added T1B_PRIME, upgraded T1G
 - `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` - Updated tiers
 - `v3/models/model_registry_v3.json` - Updated to V3.3.3
+
+---
+
+## V3.4.0: Career Clock Feature (January 2026)
+
+**Release Date:** January 1, 2026
+
+### Discovery Summary
+
+Analysis revealed that ~20% of financial advisors have **predictable career patterns** - they change firms at consistent intervals. By identifying these "Clockwork" advisors and determining where they are in their personal career cycle, we can dramatically improve conversion rates.
+
+### Key Finding: Timing Matters as Much as Profile
+
+The same advisor converts at **2-3x different rates** depending on where they are in their personal career cycle:
+
+| Timing Status | Definition | Conversion | Lift |
+|---------------|------------|------------|------|
+| **In Window** | 70-130% through typical tenure | 10-16% | 4-6x |
+| **Too Early** | <70% through typical tenure | 3.14% | 1.1x |
+| **Overdue** | >130% through typical tenure | 5-8% | 2x |
+
+### Advisor Pattern Distribution
+
+| Pattern Type | CV Range | % of Advisors | Predictability |
+|--------------|----------|---------------|----------------|
+| Clockwork | <0.3 | 20% | High |
+| Semi-Predictable | 0.3-0.5 | 14% | Medium |
+| Variable | 0.5-0.8 | 30% | Low |
+| Chaotic | >0.8 | 36% | None |
+
+### New Tiers Added
+
+#### TIER_0A_PRIME_MOVER_DUE (16.13% conversion, 5.89x lift)
+**Criteria:**
+- Matches T1 Prime Mover criteria (1-4yr tenure, 5-15yr experience, firm instability)
+- AND has predictable career pattern (tenure CV < 0.5)
+- AND is currently in move window (70-130% through typical cycle)
+
+**Rationale:** Combines the best static profile with optimal timing signal.
+
+#### TIER_0B_SMALL_FIRM_DUE (15.46% conversion, 5.64x lift)
+**Criteria:**
+- Small firm (≤10 reps)
+- AND has predictable career pattern
+- AND is currently in move window
+
+**Rationale:** Small firm advisors have portable books; timing signal amplifies this.
+
+#### TIER_0C_CLOCKWORK_DUE (11.76% conversion, 4.29x lift)
+**Criteria:**
+- Has predictable career pattern
+- AND is currently in move window
+- No other tier qualifications required
+
+**Rationale:** "Rescues" STANDARD leads who have no priority signals but optimal timing.
+
+#### TIER_NURTURE_TOO_EARLY (3.14% conversion, 1.14x lift)
+**Criteria:**
+- Has predictable career pattern
+- AND is too early in cycle (<70% through)
+- AND not at heavy bleeding firm (those convert anyway)
+
+**Action:** Exclude from active outreach, add to nurture sequence with `cc_months_until_window` as recontact date.
+
+### Technical Implementation
+
+**New Features Added to Feature Engineering:**
+- `cc_tenure_cv`: Coefficient of variation of prior job tenures
+- `cc_avg_prior_tenure_months`: Average tenure at prior firms
+- `cc_pct_through_cycle`: Current tenure / average prior tenure
+- `cc_career_pattern`: Categorical (Clockwork/Semi_Predictable/Variable/Chaotic/No_Pattern)
+- `cc_cycle_status`: Categorical (In_Window/Too_Early/Overdue/Unpredictable/Unknown)
+- `cc_is_in_move_window`: Boolean flag for tier logic
+- `cc_is_too_early`: Boolean flag for deprioritization
+- `cc_months_until_window`: Months until advisor enters their move window
+
+**Data Source:** `contact_registered_employment_history` - completed job tenures only
+
+### Expected Impact
+
+| Metric | Before V3.4 | After V3.4 | Change |
+|--------|-------------|------------|--------|
+| Highest Tier Conv | 13.64% | 16.13% | +18% |
+| New Top Tier Leads | 0 | ~50-100 | +50-100 |
+| Leads Deprioritized | 0 | ~9,000 | -9,000 |
+| Expected Overall Conv | 4.61% | 5.2-5.5%* | +15% |
+
+*Estimate based on tier redistribution
+
+### Validation Results
+
+**Tier × Career Clock Cross-Analysis:**
+
+| V3 Tier | In_Window Conv | Too_Early Conv | Lift from Timing |
+|---------|----------------|----------------|------------------|
+| T1_PRIME_MOVER | 16.13% | 0.0% | ∞ (Too_Early = 0) |
+| STANDARD | 11.76% | 3.14% | +274% |
+| T3_HEAVY_BLEEDER | 6.98% | 10.45% | -33% (exception) |
+
+**Key Insight:** Heavy bleeding firms are the exception - advisors convert even when "too early" because the firm crisis overrides personal timing.
+
+**Files Modified:**
+- `v3/sql/lead_scoring_features_pit.sql` - Added Career Clock CTEs and features
+- `v3/sql/phase_4_v3_tiered_scoring.sql` - Added TIER_0A/0B/0C and NURTURE tiers
+- `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` - Added Career Clock logic, nurture list
 
 ---
 

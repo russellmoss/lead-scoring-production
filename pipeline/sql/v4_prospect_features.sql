@@ -348,7 +348,85 @@ firm_rep_type_features AS (
 ),
 
 -- ============================================================================
--- COMBINE ALL FEATURES (22 features for V4.1.0)
+-- FEATURE GROUP 7: CAREER CLOCK FEATURES (V4.2.0)
+-- ============================================================================
+-- For inference, use prediction_date (typically CURRENT_DATE)
+-- Must match training feature engineering exactly
+-- PIT-safe: Only uses completed employment records with END_DATE < prediction_date
+-- ============================================================================
+
+career_clock_raw AS (
+    SELECT 
+        bp.crd as advisor_crd,
+        bp.prediction_date,
+        eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE as prior_end,
+        DATE_DIFF(
+            eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+            eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+            MONTH
+        ) as prior_tenure_months
+    FROM base_prospects bp
+    INNER JOIN `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history` eh
+        ON bp.crd = eh.RIA_CONTACT_CRD_ID
+    WHERE eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
+      AND eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE IS NOT NULL
+      -- PIT: Only completed jobs before prediction date
+      AND eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE < bp.prediction_date
+      AND DATE_DIFF(eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                    eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE, MONTH) > 0
+),
+
+career_clock_stats AS (
+    SELECT
+        advisor_crd,
+        prediction_date,
+        COUNT(*) as completed_jobs,
+        AVG(prior_tenure_months) as avg_prior_tenure_months,
+        SAFE_DIVIDE(STDDEV(prior_tenure_months), AVG(prior_tenure_months)) as tenure_cv
+    FROM career_clock_raw
+    GROUP BY advisor_crd, prediction_date
+    HAVING COUNT(*) >= 2
+),
+
+career_clock_features AS (
+    SELECT
+        cf.crd,
+        cf.prediction_date,
+        cf.tenure_months,
+        
+        COALESCE(ccs.completed_jobs, 0) as cc_completed_jobs,
+        ccs.avg_prior_tenure_months as cc_avg_prior_tenure_months,
+        COALESCE(ccs.tenure_cv, 1.0) as cc_tenure_cv,
+        COALESCE(SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months), 1.0) as cc_pct_through_cycle,
+        
+        CASE WHEN ccs.tenure_cv < 0.3 THEN 1 ELSE 0 END as cc_is_clockwork,
+        
+        CASE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN 1 ELSE 0
+        END as cc_is_in_move_window,
+        
+        CASE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months) < 0.7
+            THEN 1 ELSE 0
+        END as cc_is_too_early,
+        
+        CASE
+            WHEN ccs.tenure_cv < 0.5 AND ccs.avg_prior_tenure_months IS NOT NULL
+            THEN CAST(GREATEST(0, ccs.avg_prior_tenure_months * 0.7 - cf.tenure_months) AS INT64)
+            ELSE 999
+        END as cc_months_until_window
+        
+    FROM current_firm cf
+    LEFT JOIN career_clock_stats ccs 
+        ON cf.crd = ccs.advisor_crd 
+        AND cf.prediction_date = ccs.prediction_date
+),
+
+-- ============================================================================
+-- COMBINE ALL FEATURES (29 features for V4.2.0)
 -- ============================================================================
 all_features AS (
     SELECT
@@ -456,9 +534,21 @@ all_features AS (
         -- Both broker-dealer and investment advisor
         COALESCE(frt.is_dual_registered, 0) as is_dual_registered,
 
+        -- ====================================================================
+        -- FEATURE GROUP 7: CAREER CLOCK FEATURES (V4.2.0)
+        -- ====================================================================
+        -- NOTE: cc_avg_prior_tenure_months is calculated in CTE but NOT included as feature (redundant with cc_pct_through_cycle)
+        COALESCE(ccf.cc_completed_jobs, 0) as cc_completed_jobs,
+        COALESCE(ccf.cc_tenure_cv, 1.0) as cc_tenure_cv,  -- Default 1.0 = unpredictable
+        COALESCE(ccf.cc_pct_through_cycle, 1.0) as cc_pct_through_cycle,
+        COALESCE(ccf.cc_is_clockwork, 0) as cc_is_clockwork,
+        COALESCE(ccf.cc_is_in_move_window, 0) as cc_is_in_move_window,
+        COALESCE(ccf.cc_is_too_early, 0) as cc_is_too_early,
+        COALESCE(ccf.cc_months_until_window, 999) as cc_months_until_window,  -- 999 = unknown
+
         -- Metadata
         CURRENT_TIMESTAMP() as created_at,
-        'v4.1.0' as feature_version
+        'v4.2.0' as feature_version
 
     FROM base_prospects bp
     LEFT JOIN current_firm cf ON bp.crd = cf.crd
@@ -474,6 +564,7 @@ all_features AS (
     LEFT JOIN firm_bleeding_corrected_features fbc ON cf.firm_crd = fbc.firm_crd
     LEFT JOIN bleeding_velocity bv ON cf.firm_crd = bv.firm_crd
     LEFT JOIN firm_rep_type_features frt ON bp.crd = frt.crd
+    LEFT JOIN career_clock_features ccf ON bp.crd = ccf.crd
 )
 
 SELECT * FROM all_features;

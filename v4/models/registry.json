@@ -1,10 +1,68 @@
 {
-  "current_production": "v4.1.0",
+  "current_production": "v4.2.0",
   "models": {
+    "v4.2.0": {
+      "version": "v4.2.0",
+      "status": "production",
+      "training_date": "2026-01-01",
+      "deployed_date": "2026-01-01",
+      "model_type": "XGBoost",
+      "features": 29,
+      "new_features": [
+        "cc_tenure_cv",
+        "cc_pct_through_cycle",
+        "cc_is_clockwork",
+        "cc_is_in_move_window",
+        "cc_is_too_early",
+        "cc_months_until_window",
+        "cc_completed_jobs"
+      ],
+      "hyperparameters": {
+        "max_depth": 2,
+        "min_child_weight": 30,
+        "reg_alpha": 1.0,
+        "reg_lambda": 5.0,
+        "gamma": 0.3,
+        "learning_rate": 0.01,
+        "n_estimators": 2000,
+        "early_stopping_rounds": 150,
+        "subsample": 0.6,
+        "colsample_bytree": 0.7,
+        "base_score": 0.5,
+        "scale_pos_weight": 40.99
+      },
+      "metrics": {
+        "test_auc_roc": 0.6258,
+        "test_auc_pr": 0.0531,
+        "top_decile_lift": 1.87,
+        "bottom_20_pct_rate": 0.0117,
+        "train_test_auc_gap": 0.0959,
+        "early_stopping_iteration": 472
+      },
+      "comparison": {
+        "vs_v4.1.0_r3": {
+          "test_auc_change": "+0.60%",
+          "top_decile_lift_change": "-7.9%",
+          "bottom_20_rate_change": "-16.4%",
+          "summary": "Improved AUC and better deprioritization, slightly lower top decile lift"
+        }
+      },
+      "deployment_strategy": "hybrid",
+      "use_case": "deprioritization_filter_with_timing",
+      "deprioritization_threshold": 20,
+      "career_clock_features": {
+        "enabled": true,
+        "purpose": "Timing-aware deprioritization of leads contacted too early in career cycle",
+        "features": 7
+      },
+      "notes": "V4.2.0 adds Career Clock features for timing-aware scoring. Improved AUC (+0.60%) and better deprioritization (-16.4% bottom 20% rate). Career Clock features enable identification of predictable career patterns and optimal outreach timing."
+    },
     "v4.1.0": {
       "version": "v4.1.0",
       "revision": "R3",
-      "status": "production",
+      "status": "deprecated",
+      "deprecated_date": "2026-01-01",
+      "deprecated_reason": "Superseded by V4.2.0 with Career Clock features (+0.60% AUC, better deprioritization)",
       "training_date": "2025-12-30",
       "deployed_date": "2025-12-30",
       "model_type": "XGBoost",

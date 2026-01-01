@@ -1,8 +1,8 @@
 
 -- =============================================================================
--- LEAD SCORING V3.3.3: ZERO FRICTION + SWEET SPOT TIERS
+-- LEAD SCORING V3.4.0: CAREER CLOCK FEATURE + ZERO FRICTION + SWEET SPOT TIERS
 -- =============================================================================
--- Version: V3.3.3_01012026_ZERO_FRICTION_SWEET_SPOT
+-- Version: V3.4.0_01012026_CAREER_CLOCK
 -- 
 -- CHANGES FROM V3.3.2:
 --   - ADDED: TIER_1B_PRIME_ZERO_FRICTION - Highest converting segment (13.64%, 3.57x lift)
@@ -57,7 +57,7 @@
 --   - Insurance exclusions
 -- =============================================================================
 
-CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.lead_scores_v3` AS
+CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.lead_scores_v3_4` AS
 
 WITH 
 -- Wirehouse and insurance exclusion patterns
@@ -148,6 +148,13 @@ lead_features AS (
         f.num_prior_firms,
         f.pit_moves_3yr,
         f.target as converted,
+        
+        -- Career Clock Features (V3.4.0)
+        f.cc_is_in_move_window,
+        f.cc_is_too_early,
+        f.cc_career_pattern,
+        f.cc_cycle_status,
+        f.cc_months_until_window,
         
         -- Derived flags
         UPPER(l.Company) as company_upper
@@ -318,11 +325,38 @@ leads_with_certs AS (
       -- Note: PRODUCING_ADVISOR = TRUE filter already applied in lead_certifications CTE
 ),
 
--- Assign tiers (V3.3.3 UPDATED with T1B_PRIME and T1G_ENHANCED)
+-- Assign tiers (V3.4.0 UPDATED with Career Clock tiers)
 tiered_leads_base AS (
     SELECT 
         *,
         CASE 
+            -- ================================================================
+            -- TIER 0: CAREER CLOCK PRIORITY TIERS (V3.4.0)
+            -- These are advisors with predictable patterns who are "due" to move
+            -- ================================================================
+            
+            -- TIER_0A: Prime Mover + In Move Window (16.13% conversion, 5.89x lift)
+            -- Combines T1 criteria with Career Clock timing signal
+            WHEN COALESCE(cc_is_in_move_window, FALSE) = TRUE
+                 AND current_firm_tenure_months BETWEEN 12 AND 48
+                 AND industry_tenure_months BETWEEN 60 AND 180
+                 AND firm_net_change_12mo != 0
+                 AND is_wirehouse = 0
+            THEN 'TIER_0A_PRIME_MOVER_DUE'
+            
+            -- TIER_0B: Small Firm + In Move Window (15.46% conversion, 5.64x lift)
+            -- Small firm advisors who are personally "due" to move
+            WHEN COALESCE(cc_is_in_move_window, FALSE) = TRUE
+                 AND firm_rep_count_at_contact <= 10
+                 AND is_wirehouse = 0
+            THEN 'TIER_0B_SMALL_FIRM_DUE'
+            
+            -- TIER_0C: Clockwork Due (11.76% conversion, 4.29x lift)
+            -- Any predictable advisor in their move window (rescues STANDARD leads)
+            WHEN COALESCE(cc_is_in_move_window, FALSE) = TRUE
+                 AND is_wirehouse = 0
+            THEN 'TIER_0C_CLOCKWORK_DUE'
+            
             -- ==========================================================================
             -- TIER 1B_PRIME: ZERO FRICTION BLEEDER (Highest Converting Segment)
             -- ==========================================================================
@@ -518,6 +552,17 @@ tiered_leads_base AS (
                  AND industry_tenure_months >= 60               -- 5+ years experience
             THEN 'TIER_4_HEAVY_BLEEDER'
             
+            -- ================================================================
+            -- DEPRIORITIZATION: Too Early (V3.4.0)
+            -- Predictable advisors contacted before their typical move window
+            -- These should be nurtured, not actively pursued
+            -- ================================================================
+            
+            -- Check AFTER all priority tiers, BEFORE STANDARD
+            WHEN COALESCE(cc_is_too_early, FALSE) = TRUE
+                 AND firm_net_change_12mo >= -10  -- Not at a heavy bleeding firm (those convert anyway)
+            THEN 'TIER_NURTURE_TOO_EARLY'
+            
             -- ============================================================
             -- STANDARD: All other leads
             -- ============================================================
@@ -529,8 +574,11 @@ tiered_leads_base AS (
 tiered_leads AS (
     SELECT 
         *,
-        -- Tier Display Names (for SGA dashboard)
+        -- Tier Display Names (for SGA dashboard) - V3.4.0 UPDATED
         CASE score_tier
+            WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN '⏰ Tier 0A: Prime Mover + Career Clock'
+            WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN '⏰ Tier 0B: Small Firm + Career Clock'
+            WHEN 'TIER_0C_CLOCKWORK_DUE' THEN '⏰ Tier 0C: Clockwork Due'
             WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN '⭐ Tier 1B_PRIME: Zero Friction Bleeder'
             WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN '🏆 Tier 1A: Prime Mover + CFP'
             WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN '🚀 Tier 1G_ENHANCED: Sweet Spot Growth'
@@ -544,12 +592,17 @@ tiered_leads AS (
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN '🥈 Moderate Bleeder'
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN '🥉 Experienced Mover'
             WHEN 'TIER_4_HEAVY_BLEEDER' THEN '🎖️ Heavy Bleeder'
+            WHEN 'TIER_NURTURE_TOO_EARLY' THEN '🌱 Nurture: Too Early'
             ELSE 'Standard'
         END as tier_display,
         
-        -- Expected Conversion Rate (V3.3.3 UPDATED - ordered by performance)
+        -- Expected Conversion Rate (V3.4.0 UPDATED - ordered by performance)
         CASE score_tier
-            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 0.1364     -- V3.3.3: 13.64% (n=22) - HIGHEST
+            -- Career Clock Tiers (V3.4.0)
+            WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN 0.1613      -- 16.13%
+            WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN 0.1546       -- 15.46%
+            WHEN 'TIER_0C_CLOCKWORK_DUE' THEN 0.1176        -- 11.76%
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 0.1364     -- V3.3.3: 13.64% (n=22)
             WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 0.1000        -- V3.3.3: 10.00% (n=50) - UPDATED
             WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 0.0909    -- V3.3.3: 9.09% (n=66) - NEW
             WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 0.0549  -- V3.3.3: 5.49% (n=237) - UPDATED
@@ -562,12 +615,17 @@ tiered_leads AS (
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 0.11
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 0.10
             WHEN 'TIER_4_HEAVY_BLEEDER' THEN 0.10
+            WHEN 'TIER_NURTURE_TOO_EARLY' THEN 0.0314       -- 3.14%
             ELSE 0.0382                                       -- UPDATED: 3.82% baseline
         END as expected_conversion_rate,
         
-        -- Expected Lift vs baseline (3.82%) - V3.3.3 UPDATED
+        -- Expected Lift vs baseline (3.82%) - V3.4.0 UPDATED
         CASE score_tier
-            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 3.57    -- V3.3.3: 13.64% / 3.82% - HIGHEST
+            -- Career Clock Tiers (V3.4.0)
+            WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN 5.89
+            WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN 5.64
+            WHEN 'TIER_0C_CLOCKWORK_DUE' THEN 4.29
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 3.57    -- V3.3.3: 13.64% / 3.82%
             WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 2.62       -- V3.3.3: 10.00% / 3.82% - UPDATED
             WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 2.38    -- V3.3.3: 9.09% / 3.82% - NEW
             WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 1.44   -- V3.3.3: 5.49% / 3.82% - UPDATED
@@ -580,29 +638,38 @@ tiered_leads AS (
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 2.5
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 2.5
             WHEN 'TIER_4_HEAVY_BLEEDER' THEN 2.3
+            WHEN 'TIER_NURTURE_TOO_EARLY' THEN 1.14
             ELSE 1.00
         END as expected_lift,
         
-        -- Priority Ranking (for sorting - lower = higher priority) - V3.3.3 UPDATED
+        -- Priority Ranking (for sorting - lower = higher priority) - V3.4.0 UPDATED
         CASE score_tier
-            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 1       -- V3.3.3: Highest priority (13.64%)
-            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 2          -- V3.3.3: Second priority (10.00%)
-            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 3      -- V3.3.3: Third priority (9.09%)
-            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 4     -- V3.3.3: Fourth priority (5.49%)
-            WHEN 'TIER_1G_GROWTH_STAGE' THEN 5             -- V3.3.3: Fifth priority (5.08%)
-            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 6        -- UPDATED: Was 1, now 6
-            WHEN 'TIER_1D_SMALL_FIRM' THEN 7
-            WHEN 'TIER_1E_PRIME_MOVER' THEN 8              -- UPDATED: Was 3, now 8
-            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 9        -- UPDATED: Was 6, now 9
-            WHEN 'TIER_2A_PROVEN_MOVER' THEN 8             -- UPDATED from 7
-            WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 8         -- UPDATED from 7
-            WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 9         -- UPDATED from 8
-            WHEN 'TIER_4_HEAVY_BLEEDER' THEN 10            -- UPDATED from 9
+            -- Career Clock Tiers (V3.4.0 - highest priority)
+            WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN 1           -- NEW: Highest
+            WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN 2            -- NEW
+            WHEN 'TIER_0C_CLOCKWORK_DUE' THEN 3             -- NEW
+            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 4       -- Was 1
+            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 5           -- Was 2
+            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 6       -- Was 3
+            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 7      -- Was 4
+            WHEN 'TIER_1G_GROWTH_STAGE' THEN 8               -- Was 5
+            WHEN 'TIER_1C_PRIME_MOVER_SMALL' THEN 9          -- Was 6
+            WHEN 'TIER_1D_SMALL_FIRM' THEN 10               -- Was 7
+            WHEN 'TIER_1E_PRIME_MOVER' THEN 11               -- Was 8
+            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 12         -- Was 9
+            WHEN 'TIER_2A_PROVEN_MOVER' THEN 13              -- Was 8
+            WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 14          -- Was 8
+            WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 15          -- Was 9
+            WHEN 'TIER_4_HEAVY_BLEEDER' THEN 16              -- Was 10
+            WHEN 'TIER_NURTURE_TOO_EARLY' THEN 98            -- NEW: Near bottom
             ELSE 99
         END as priority_rank,
         
-        -- Action Recommended - V3.3.3 UPDATED
+        -- Action Recommended - V3.4.0 UPDATED
         CASE score_tier
+            WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN '⏰ ULTRA-PRIORITY: Prime Mover + Career Clock timing (16.13% conversion)'
+            WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN '⏰ ULTRA-PRIORITY: Small Firm + Career Clock timing (15.46% conversion)'
+            WHEN 'TIER_0C_CLOCKWORK_DUE' THEN '⏰ HIGH PRIORITY: Career Clock timing signal (11.76% conversion)'
             WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN '⭐ ULTRA-PRIORITY: Zero Friction Bleeder - ALL barriers removed (13.64% conversion)'
             WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN '🔥 ULTRA-PRIORITY: Call immediately - CFP at unstable firm (10.00% conversion)'
             WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN '🚀 HIGH PRIORITY: Sweet Spot Growth Advisor - optimal AUM range (9.09% conversion)'
@@ -616,11 +683,34 @@ tiered_leads AS (
             WHEN 'TIER_2B_MODERATE_BLEEDER' THEN 'Priority outreach within 24 hours'
             WHEN 'TIER_3_EXPERIENCED_MOVER' THEN 'Priority follow-up this week'
             WHEN 'TIER_4_HEAVY_BLEEDER' THEN 'Priority follow-up this week'
+            WHEN 'TIER_NURTURE_TOO_EARLY' THEN 'NURTURE - DO NOT ACTIVELY PURSUE: Too early in cycle (3.14% conversion)'
             ELSE 'Standard outreach cadence'
         END as action_recommended,
         
-        -- Tier Explanation (for sales team - V3.2.1 includes certification context)
+        -- Tier Explanation (for sales team - V3.4.0 UPDATED with Career Clock)
         CASE score_tier
+            WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN CONCAT(
+                'HIGHEST PRIORITY - Career Clock: ', FirstName, ' matches Prime Mover criteria (1-4yr tenure, 5-15yr experience, ',
+                'firm instability) AND has a predictable career pattern showing they are currently in their ',
+                'typical "move window" (70-130% through their average tenure cycle). Historical conversion: 16.13%.'
+            )
+            WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN CONCAT(
+                'HIGHEST PRIORITY - Career Clock: ', FirstName, ' is at a small firm (≤10 reps) AND has a predictable career ',
+                'pattern showing they are currently in their typical "move window". Small firm advisors have ',
+                'portable books and this timing signal indicates high receptivity. Historical conversion: 15.46%.'
+            )
+            WHEN 'TIER_0C_CLOCKWORK_DUE' THEN CONCAT(
+                'HIGH PRIORITY - Career Clock: ', FirstName, ' has a predictable career pattern (consistent tenure lengths) and ',
+                'is currently in their typical "move window" (70-130% through their average tenure cycle). ',
+                'Even without other priority signals, timing alone makes them 4.3x more likely to convert. ',
+                'Historical conversion: 11.76%.'
+            )
+            WHEN 'TIER_NURTURE_TOO_EARLY' THEN CONCAT(
+                'NURTURE - DO NOT ACTIVELY PURSUE: ', FirstName, ' has a predictable career pattern but is ',
+                'TOO EARLY in their cycle (less than 70% through typical tenure). Contacting now wastes ',
+                'outreach - they convert at only 3.14%. Add to nurture sequence and revisit in ',
+                CAST(COALESCE(cc_months_until_window, 0) AS STRING), ' months when they enter their move window.'
+            )
             WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN CONCAT(
                 FirstName, ' is a ZERO FRICTION BLEEDER: ',
                 'Pure RIA (Series 65 only) at small firm (', CAST(firm_rep_count_at_contact AS STRING), ' reps) ',

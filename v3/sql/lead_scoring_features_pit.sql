@@ -295,6 +295,124 @@ mobility_derived AS (
 ),
 
 -- ========================================================================
+-- CAREER CLOCK: Individual advisor timing pattern features (V3.4.0)
+-- ========================================================================
+-- METHODOLOGY:
+-- 1. Calculate coefficient of variation (CV) of prior job tenures
+-- 2. CV < 0.3 = "Clockwork" (highly predictable pattern)
+-- 3. CV 0.3-0.5 = "Semi-Predictable" 
+-- 4. CV >= 0.5 = Variable/Chaotic (can't reliably predict timing)
+-- 5. "In Window" = advisor is 70-130% through their typical tenure cycle
+-- 
+-- KEY FINDINGS:
+-- - T1 + In_Window: 16.13% conversion (5.89x lift)
+-- - Small Firm + In_Window: 15.46% conversion (5.64x lift)
+-- - STANDARD + In_Window: 11.76% conversion (4.29x lift)
+-- - Any + Too_Early: 3.14% conversion (waste of outreach)
+-- ========================================================================
+career_clock_raw AS (
+    SELECT 
+        lb.lead_id,
+        lb.advisor_crd,
+        lb.contacted_date,
+        eh.PREVIOUS_REGISTRATION_COMPANY_CRD_ID as prior_firm_crd,
+        eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE as prior_start,
+        eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE as prior_end,
+        DATE_DIFF(
+            eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+            eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+            MONTH
+        ) as prior_tenure_months
+    FROM lead_base lb
+    INNER JOIN `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history` eh
+        ON lb.advisor_crd = eh.RIA_CONTACT_CRD_ID
+    WHERE eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
+      AND eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE IS NOT NULL
+      -- PIT: Only completed jobs before contact date
+      AND eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE < lb.contacted_date
+      -- Valid tenure (> 0 months)
+      AND DATE_DIFF(eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                    eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE, MONTH) > 0
+),
+
+career_clock_stats AS (
+    SELECT
+        lead_id,
+        advisor_crd,
+        contacted_date,
+        COUNT(*) as completed_jobs,
+        AVG(prior_tenure_months) as avg_prior_tenure_months,
+        STDDEV(prior_tenure_months) as tenure_stddev,
+        SAFE_DIVIDE(STDDEV(prior_tenure_months), AVG(prior_tenure_months)) as tenure_cv,
+        MIN(prior_tenure_months) as min_prior_tenure,
+        MAX(prior_tenure_months) as max_prior_tenure
+    FROM career_clock_raw
+    GROUP BY lead_id, advisor_crd, contacted_date
+    HAVING COUNT(*) >= 2  -- Need 2+ completed jobs to detect pattern
+),
+
+career_clock_features AS (
+    SELECT
+        afv.lead_id,
+        afv.advisor_crd,
+        afv.current_firm_tenure_months,
+        
+        -- Raw stats
+        COALESCE(ccs.completed_jobs, 0) as cc_completed_jobs,
+        ccs.avg_prior_tenure_months as cc_avg_prior_tenure_months,
+        ccs.tenure_stddev as cc_tenure_stddev,
+        ccs.tenure_cv as cc_tenure_cv,
+        
+        -- Career Pattern Classification
+        CASE
+            WHEN ccs.tenure_cv IS NULL THEN 'No_Pattern'
+            WHEN ccs.tenure_cv < 0.3 THEN 'Clockwork'
+            WHEN ccs.tenure_cv < 0.5 THEN 'Semi_Predictable'
+            WHEN ccs.tenure_cv < 0.8 THEN 'Variable'
+            ELSE 'Chaotic'
+        END as cc_career_pattern,
+        
+        -- Percent through personal cycle
+        SAFE_DIVIDE(afv.current_firm_tenure_months, ccs.avg_prior_tenure_months) as cc_pct_through_cycle,
+        
+        -- Move Window Status (for predictable advisors only)
+        CASE
+            WHEN ccs.tenure_cv IS NULL THEN 'Unknown'
+            WHEN ccs.tenure_cv >= 0.5 THEN 'Unpredictable'
+            WHEN SAFE_DIVIDE(afv.current_firm_tenure_months, ccs.avg_prior_tenure_months) < 0.7 THEN 'Too_Early'
+            WHEN SAFE_DIVIDE(afv.current_firm_tenure_months, ccs.avg_prior_tenure_months) BETWEEN 0.7 AND 1.3 THEN 'In_Window'
+            ELSE 'Overdue'
+        END as cc_cycle_status,
+        
+        -- Boolean flags for tier logic
+        CASE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(afv.current_firm_tenure_months, ccs.avg_prior_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN TRUE
+            ELSE FALSE
+        END as cc_is_in_move_window,
+        
+        CASE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(afv.current_firm_tenure_months, ccs.avg_prior_tenure_months) < 0.7
+            THEN TRUE
+            ELSE FALSE
+        END as cc_is_too_early,
+        
+        -- Months until move window (for nurture timing)
+        CASE
+            WHEN ccs.tenure_cv < 0.5 AND ccs.avg_prior_tenure_months IS NOT NULL
+            THEN GREATEST(0, CAST(ccs.avg_prior_tenure_months * 0.7 - afv.current_firm_tenure_months AS INT64))
+            ELSE NULL
+        END as cc_months_until_window
+        
+    FROM advisor_features_virtual afv
+    LEFT JOIN career_clock_stats ccs 
+        ON afv.lead_id = ccs.lead_id 
+        AND afv.advisor_crd = ccs.advisor_crd
+),
+
+-- ========================================================================
 -- DATA QUALITY SIGNALS: Null/Unknown indicators (highly predictive in V12)
 -- EXCEPTION: These join to ria_contacts_current ONLY for boolean indicators
 -- ========================================================================
@@ -528,7 +646,21 @@ SELECT
     COALESCE(dqs.is_linkedin_missing, 0) as is_linkedin_missing,
     COALESCE(dqs.is_personal_email_missing, 0) as is_personal_email_missing,
     COALESCE(dqs.is_license_data_missing, 0) as is_license_data_missing,
-    COALESCE(dqs.is_industry_tenure_missing, 0) as is_industry_tenure_missing
+    COALESCE(dqs.is_industry_tenure_missing, 0) as is_industry_tenure_missing,
+    
+    -- =====================
+    -- CAREER CLOCK FEATURES (V3.4.0)
+    -- =====================
+    ccf.cc_completed_jobs,
+    ccf.cc_avg_prior_tenure_months,
+    ccf.cc_tenure_stddev,
+    ccf.cc_tenure_cv,
+    ccf.cc_career_pattern,
+    ccf.cc_pct_through_cycle,
+    ccf.cc_cycle_status,
+    ccf.cc_is_in_move_window,
+    ccf.cc_is_too_early,
+    ccf.cc_months_until_window
     
 FROM lead_base lb
 LEFT JOIN rep_state_pit rsp ON lb.lead_id = rsp.lead_id
@@ -541,4 +673,5 @@ LEFT JOIN firm_stability_derived fst ON rsp.lead_id = fst.lead_id
 LEFT JOIN stability_percentiles sp ON fst.lead_id = sp.lead_id
 LEFT JOIN accolades_pit ap ON lb.lead_id = ap.lead_id
 LEFT JOIN disclosures_pit dp ON lb.lead_id = dp.lead_id
+LEFT JOIN career_clock_features ccf ON avf.lead_id = ccf.lead_id
 WHERE lb.target IS NOT NULL  -- Exclude right-censored leads

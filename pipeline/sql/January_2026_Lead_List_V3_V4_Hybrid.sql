@@ -371,14 +371,107 @@ v4_filtered AS (
 ),
 
 -- ============================================================================
--- K2. APPLY V3.2 TIER LOGIC WITH NARRATIVES
+-- CAREER CLOCK STATS: Calculate advisor career patterns (V3.4.0)
+-- ============================================================================
+career_clock_stats AS (
+    SELECT
+        RIA_CONTACT_CRD_ID as advisor_crd,
+        AVG(DATE_DIFF(
+            PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+            PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+            MONTH
+        )) as avg_tenure_months,
+        SAFE_DIVIDE(
+            STDDEV(DATE_DIFF(
+                PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+                MONTH
+            )),
+            AVG(DATE_DIFF(
+                PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+                MONTH
+            ))
+        ) as tenure_cv
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history`
+    WHERE PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
+      AND PREVIOUS_REGISTRATION_COMPANY_START_DATE IS NOT NULL
+      AND DATE_DIFF(PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                    PREVIOUS_REGISTRATION_COMPANY_START_DATE, MONTH) > 0
+    GROUP BY RIA_CONTACT_CRD_ID
+    HAVING COUNT(*) >= 2
+),
+
+-- ============================================================================
+-- K2. APPLY V3.4.0 TIER LOGIC WITH CAREER CLOCK (V3.4.0)
 -- ============================================================================
 scored_prospects AS (
     SELECT 
         ep.*,
         
-        -- Score tier (V3.3.3 UPDATED - T1B_PRIME first, T1G_ENHANCED added)
+        -- Career Clock Features (calculated inline) - V3.4.0
+        ccs.tenure_cv as cc_tenure_cv,
+        ccs.avg_tenure_months as cc_avg_prior_tenure_months,
+        SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) as cc_pct_through_cycle,
+        
+        CASE
+            WHEN ccs.tenure_cv IS NULL THEN 'No_Pattern'
+            WHEN ccs.tenure_cv < 0.3 THEN 'Clockwork'
+            WHEN ccs.tenure_cv < 0.5 THEN 'Semi_Predictable'
+            WHEN ccs.tenure_cv < 0.8 THEN 'Variable'
+            ELSE 'Chaotic'
+        END as cc_career_pattern,
+        
+        CASE
+            WHEN ccs.tenure_cv IS NULL THEN 'Unknown'
+            WHEN ccs.tenure_cv >= 0.5 THEN 'Unpredictable'
+            WHEN SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) < 0.7 THEN 'Too_Early'
+            WHEN SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3 THEN 'In_Window'
+            ELSE 'Overdue'
+        END as cc_cycle_status,
+        
+        -- Boolean flags
+        CASE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN TRUE ELSE FALSE
+        END as cc_is_in_move_window,
+        
+        CASE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) < 0.7
+            THEN TRUE ELSE FALSE
+        END as cc_is_too_early,
+        
+        -- Months until window
+        CASE
+            WHEN ccs.tenure_cv < 0.5 AND ccs.avg_tenure_months IS NOT NULL
+            THEN GREATEST(0, CAST(ccs.avg_tenure_months * 0.7 AS INT64) - ep.tenure_months)
+            ELSE NULL
+        END as cc_months_until_window,
+        
+        -- Score tier (V3.4.0 UPDATED - Career Clock tiers added)
         CASE 
+            -- TIER 0: Career Clock Priority Tiers (V3.4.0)
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.tenure_months BETWEEN 12 AND 48
+                 AND ep.industry_tenure_months BETWEEN 60 AND 180
+                 AND ep.firm_net_change_12mo != 0
+                 AND ep.is_wirehouse = 0
+            THEN 'TIER_0A_PRIME_MOVER_DUE'
+            
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.firm_rep_count <= 10
+                 AND ep.is_wirehouse = 0
+            THEN 'TIER_0B_SMALL_FIRM_DUE'
+            
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.is_wirehouse = 0
+            THEN 'TIER_0C_CLOCKWORK_DUE'
+            
             -- V3.3.3: T1B_PRIME - Zero Friction Bleeder (HIGHEST PRIORITY - 13.64% conversion)
             WHEN has_series_65_only = 1
                  AND has_portable_custodian = 1
@@ -414,6 +507,13 @@ scored_prospects AS (
             -- OPTION C: TIER_5_HEAVY_BLEEDER EXCLUDED (marginal lift 3.42%, not worth including)
             WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 'STANDARD'  -- Map to STANDARD (excluded)
             WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 'STANDARD'  -- Map to STANDARD (excluded)
+            
+            -- NURTURE: Too Early (V3.4.0 - EXCLUDED from active list)
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) < 0.7
+                 AND ep.firm_net_change_12mo >= -10
+            THEN 'TIER_NURTURE_TOO_EARLY'
+            
             ELSE 'STANDARD'
         END as score_tier,
         
@@ -538,6 +638,7 @@ scored_prospects AS (
         END as v3_score_narrative
         
     FROM v4_filtered ep
+    LEFT JOIN career_clock_stats ccs ON ep.crd = ccs.advisor_crd
 ),
 
 -- ============================================================================
@@ -940,7 +1041,8 @@ final_lead_list AS (
     SELECT 
         lws.*
     FROM leads_with_sga lws
-    WHERE NOT (
+    WHERE lws.score_tier != 'TIER_NURTURE_TOO_EARLY'  -- V3.4.0: Exclude too-early leads
+      AND NOT (
         -- V3/V4.1 Disagreement Filter
         -- Exclude Tier 1 leads where V4.1 < 60th percentile (was 70th for V4.0)
         lws.score_tier IN (
@@ -1027,6 +1129,12 @@ SELECT
     shap_top2_feature,
     shap_top3_feature,
     
+    -- Career Clock Features (V3.4.0)
+    cc_career_pattern,
+    cc_cycle_status,
+    cc_pct_through_cycle,
+    cc_months_until_window,
+    
     -- SGA ASSIGNMENT (NEW!)
     sga_owner,
     sga_id,
@@ -1037,3 +1145,146 @@ SELECT
 FROM final_lead_list
 ORDER BY 
     overall_rank;
+
+-- ============================================================================
+-- NURTURE LIST: Too-Early Leads for Future Outreach (V3.4.0)
+-- These leads should be contacted when they enter their move window
+-- ============================================================================
+CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.nurture_list_too_early` AS
+
+WITH 
+-- Recreate necessary CTEs for nurture list
+career_clock_stats_nurture AS (
+    SELECT
+        RIA_CONTACT_CRD_ID as advisor_crd,
+        AVG(DATE_DIFF(
+            PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+            PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+            MONTH
+        )) as avg_tenure_months,
+        SAFE_DIVIDE(
+            STDDEV(DATE_DIFF(
+                PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+                MONTH
+            )),
+            AVG(DATE_DIFF(
+                PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+                MONTH
+            ))
+        ) as tenure_cv
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history`
+    WHERE PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
+      AND PREVIOUS_REGISTRATION_COMPANY_START_DATE IS NOT NULL
+      AND DATE_DIFF(PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                    PREVIOUS_REGISTRATION_COMPANY_START_DATE, MONTH) > 0
+    GROUP BY RIA_CONTACT_CRD_ID
+    HAVING COUNT(*) >= 2
+),
+base_prospects_nurture AS (
+    SELECT 
+        c.RIA_CONTACT_CRD_ID as crd,
+        c.CONTACT_FIRST_NAME as first_name,
+        c.CONTACT_LAST_NAME as last_name,
+        c.PRIMARY_FIRM_NAME as firm_name,
+        c.EMAIL as email,
+        DATE_DIFF(CURRENT_DATE(), c.PRIMARY_FIRM_START_DATE, MONTH) as tenure_months,
+        SAFE_CAST(c.PRIMARY_FIRM AS INT64) as firm_crd
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
+    WHERE c.CONTACT_FIRST_NAME IS NOT NULL AND c.CONTACT_LAST_NAME IS NOT NULL
+      AND c.PRIMARY_FIRM_START_DATE IS NOT NULL
+      AND c.PRODUCING_ADVISOR = TRUE
+),
+firm_metrics_nurture AS (
+    SELECT
+        SAFE_CAST(PRIMARY_FIRM AS INT64) as firm_crd,
+        COUNT(DISTINCT RIA_CONTACT_CRD_ID) as current_reps
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current`
+    WHERE PRIMARY_FIRM IS NOT NULL
+    GROUP BY PRIMARY_FIRM
+),
+firm_departures_nurture AS (
+    SELECT
+        SAFE_CAST(PREVIOUS_REGISTRATION_COMPANY_CRD_ID AS INT64) as firm_crd,
+        COUNT(DISTINCT RIA_CONTACT_CRD_ID) as departures_12mo
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history`
+    WHERE PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
+      AND PREVIOUS_REGISTRATION_COMPANY_END_DATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)
+    GROUP BY 1
+),
+firm_arrivals_nurture AS (
+    SELECT
+        SAFE_CAST(PRIMARY_FIRM AS INT64) as firm_crd,
+        COUNT(DISTINCT RIA_CONTACT_CRD_ID) as arrivals_12mo
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current`
+    WHERE PRIMARY_FIRM_START_DATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH)
+      AND PRIMARY_FIRM IS NOT NULL
+    GROUP BY 1
+),
+firm_stability_nurture AS (
+    SELECT
+        h.firm_crd,
+        COALESCE(d.departures_12mo, 0) as departures_12mo,
+        COALESCE(a.arrivals_12mo, 0) as arrivals_12mo,
+        COALESCE(a.arrivals_12mo, 0) - COALESCE(d.departures_12mo, 0) as firm_net_change_12mo
+    FROM firm_metrics_nurture h
+    LEFT JOIN firm_departures_nurture d ON h.firm_crd = d.firm_crd
+    LEFT JOIN firm_arrivals_nurture a ON h.firm_crd = a.firm_crd
+),
+nurture_prospects AS (
+    SELECT 
+        bp.crd,
+        bp.first_name,
+        bp.last_name,
+        bp.firm_name,
+        bp.email,
+        bp.tenure_months,
+        ccs.avg_tenure_months as cc_avg_prior_tenure_months,
+        ccs.tenure_cv,
+        SAFE_DIVIDE(bp.tenure_months, ccs.avg_tenure_months) as cc_pct_through_cycle,
+        COALESCE(fs.firm_net_change_12mo, 0) as firm_net_change_12mo,
+        CASE
+            WHEN ccs.tenure_cv IS NULL THEN 'No_Pattern'
+            WHEN ccs.tenure_cv < 0.3 THEN 'Clockwork'
+            WHEN ccs.tenure_cv < 0.5 THEN 'Semi_Predictable'
+            WHEN ccs.tenure_cv < 0.8 THEN 'Variable'
+            ELSE 'Chaotic'
+        END as cc_career_pattern,
+        CASE
+            WHEN ccs.tenure_cv IS NULL THEN 'Unknown'
+            WHEN ccs.tenure_cv >= 0.5 THEN 'Unpredictable'
+            WHEN SAFE_DIVIDE(bp.tenure_months, ccs.avg_tenure_months) < 0.7 THEN 'Too_Early'
+            WHEN SAFE_DIVIDE(bp.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3 THEN 'In_Window'
+            ELSE 'Overdue'
+        END as cc_cycle_status,
+        CASE
+            WHEN ccs.tenure_cv < 0.5 AND ccs.avg_tenure_months IS NOT NULL
+            THEN GREATEST(0, CAST(ccs.avg_tenure_months * 0.7 AS INT64) - bp.tenure_months)
+            ELSE NULL
+        END as cc_months_until_window
+    FROM base_prospects_nurture bp
+    LEFT JOIN career_clock_stats_nurture ccs ON bp.crd = ccs.advisor_crd
+    LEFT JOIN firm_stability_nurture fs ON bp.firm_crd = fs.firm_crd
+    WHERE ccs.tenure_cv < 0.5  -- Predictable pattern
+      AND SAFE_DIVIDE(bp.tenure_months, ccs.avg_tenure_months) < 0.7  -- Too early
+      AND COALESCE(fs.firm_net_change_12mo, 0) >= -10  -- Not at heavy bleeding firm
+)
+SELECT
+    crd,
+    first_name,
+    last_name,
+    firm_name as company,
+    email,
+    cc_career_pattern,
+    cc_cycle_status,
+    cc_pct_through_cycle,
+    cc_months_until_window,
+    DATE_ADD(CURRENT_DATE(), INTERVAL cc_months_until_window MONTH) as estimated_window_entry_date,
+    cc_avg_prior_tenure_months,
+    tenure_months as current_firm_tenure_months,
+    CONCAT('Predictable advisor contacted too early in cycle. Will enter move window in ',
+           CAST(cc_months_until_window AS STRING), ' months.') as nurture_reason,
+    CURRENT_TIMESTAMP() as created_at
+FROM nurture_prospects
+ORDER BY cc_months_until_window ASC;  -- Soonest to enter window first
