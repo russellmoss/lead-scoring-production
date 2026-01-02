@@ -1,10 +1,23 @@
 {
-  "model_id": "lead-scoring-v3.3.3",
-  "model_version": "V3.3.3_01012026_ZERO_FRICTION_SWEET_SPOT",
+  "model_id": "lead-scoring-v3.4.0",
+  "model_version": "V3.4.0_01012026_CAREER_CLOCK",
   "model_type": "rules-based-tiers",
   "status": "production",
   "created_date": "2025-12-21",
-  "updated_date": "2026-01-01",
+  "updated_date": "2026-01-02",
+  "changes_from_v3.3.3": [
+    "ADDED: TIER_0A_PRIME_MOVER_DUE - Prime Mover + Career Clock timing (16.13% conversion, 5.89x lift)",
+    "ADDED: TIER_0B_SMALL_FIRM_DUE - Small Firm + Career Clock timing (15.46% conversion, 5.64x lift)",
+    "ADDED: TIER_0C_CLOCKWORK_DUE - Clockwork Due timing signal (11.76% conversion, 4.29x lift)",
+    "ADDED: TIER_NURTURE_TOO_EARLY - Advisors too early in career cycle (3.14% conversion, 1.14x lift)",
+    "FEATURE: Career Clock timing signals identify advisors 'due' to move based on predictable career patterns",
+    "KEY INSIGHT: ~20% of advisors have predictable career patterns (Clockwork) - timing signal adds 4-6x lift",
+    "METHODOLOGY: Uses tenure coefficient of variation (CV) < 0.3 to identify Clockwork advisors",
+    "PRIORITY: Career Clock tiers (0A/0B/0C) have highest priority ranking (1-3) above all other tiers",
+    "INTEGRATION: Works seamlessly with V4.2.0 Career Clock features - 96%+ of Career Clock tier leads NOT deprioritized",
+    "VALIDATION: TIER_0B validated at 33.33% conversion (12 leads) - statistically significant above baseline",
+    "ANALYSIS: V3.4.0 Career Clock Implementation (January 2026)"
+  ],
   "changes_from_v3.3.2": [
     "ADDED: TIER_1B_PRIME_ZERO_FRICTION - Zero Friction Bleeder (S65 + Custodian + Small + Bleeding)",
     "PERFORMANCE: 13.64% conversion (3.57x lift) - HIGHEST TIER EVER",
@@ -86,6 +99,10 @@
     "Changed bleeding criterion from != 0 to < 0"
   ],
   "expected_performance": {
+    "tier_0a_prime_mover_due_lift": "5.89x",
+    "tier_0b_small_firm_due_lift": "5.64x",
+    "tier_0c_clockwork_due_lift": "4.29x",
+    "tier_nurture_too_early_lift": "1.14x",
     "tier_1b_prime_zero_friction_lift": "3.57x",
     "tier_1a_cfp_lift": "2.62x",
     "tier_1g_enhanced_sweet_spot_lift": "2.38x",
@@ -101,6 +118,77 @@
     "tier_4_lift": "3.27x"
   },
   "tier_definitions": {
+    "TIER_0A_PRIME_MOVER_DUE": {
+      "description": "Prime Mover + Career Clock timing signal - Combines T1 criteria with predictable career pattern timing",
+      "expected_conversion_rate": 0.1613,
+      "expected_lift": 5.89,
+      "historical_validation": {
+        "leads": 12,
+        "conversions": 2,
+        "conversion_rate": 0.1667,
+        "time_period": "January 2026 validation"
+      },
+      "criteria": {
+        "career_clock": "cc_is_in_move_window = TRUE (predictable pattern, in move window)",
+        "current_firm_tenure_months": "12-48 months",
+        "industry_tenure_months": "60-180 months (5-15 years)",
+        "firm_net_change_12mo": "!= 0 (firm instability)",
+        "is_wirehouse": "0 (not wirehouse)"
+      },
+      "key_insight": "Combines Prime Mover criteria (mid-career, unstable firm) with Career Clock timing signal for maximum conversion",
+      "priority_rank": 1,
+      "added_version": "V3.4.0"
+    },
+    "TIER_0B_SMALL_FIRM_DUE": {
+      "description": "Small Firm + Career Clock timing signal - Small firm advisors who are personally 'due' to move",
+      "expected_conversion_rate": 0.1546,
+      "expected_lift": 5.64,
+      "historical_validation": {
+        "leads": 12,
+        "conversions": 4,
+        "conversion_rate": 0.3333,
+        "time_period": "January 2026 validation",
+        "note": "Small sample but statistically significant above baseline (95% CI: 6.66% - 60.01%)"
+      },
+      "criteria": {
+        "career_clock": "cc_is_in_move_window = TRUE (predictable pattern, in move window)",
+        "firm_rep_count_at_contact": "<= 10 (very small firm)",
+        "is_wirehouse": "0 (not wirehouse)"
+      },
+      "key_insight": "Small firms + Career Clock timing = highest validated conversion rate (33.33% in validation sample)",
+      "priority_rank": 2,
+      "added_version": "V3.4.0"
+    },
+    "TIER_0C_CLOCKWORK_DUE": {
+      "description": "Clockwork Due - Any predictable advisor in their move window (rescues STANDARD leads)",
+      "expected_conversion_rate": 0.1176,
+      "expected_lift": 4.29,
+      "historical_validation": {
+        "leads": 84,
+        "conversions": 8,
+        "conversion_rate": 0.0952,
+        "time_period": "January 2026 validation"
+      },
+      "criteria": {
+        "career_clock": "cc_is_in_move_window = TRUE (predictable pattern, in move window)",
+        "is_wirehouse": "0 (not wirehouse)"
+      },
+      "key_insight": "Broadest Career Clock tier - captures any predictable advisor in move window, even if they don't meet other Prime Mover criteria",
+      "priority_rank": 3,
+      "added_version": "V3.4.0"
+    },
+    "TIER_NURTURE_TOO_EARLY": {
+      "description": "Nurture - Too Early - Advisors identified as predictable but too early in their career cycle",
+      "expected_conversion_rate": 0.0314,
+      "expected_lift": 1.14,
+      "criteria": {
+        "career_clock": "cc_is_too_early = TRUE (predictable pattern, but not yet in move window)",
+        "is_wirehouse": "0 (not wirehouse)"
+      },
+      "key_insight": "Captures advisors with predictable patterns who will be valuable later - nurture now for future conversion",
+      "priority_rank": 98,
+      "added_version": "V3.4.0"
+    },
     "TIER_1A_PRIME_MOVER_CFP": {
       "description": "CFP holder (book ownership signal) at bleeding firm - high conversion potential",
       "expected_conversion_rate": 0.1000,
