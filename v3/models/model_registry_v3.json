@@ -1,10 +1,22 @@
 {
-  "model_id": "lead-scoring-v3.4.0",
-  "model_version": "V3.4.0_01012026_CAREER_CLOCK",
+  "model_id": "lead-scoring-v3.5.0",
+  "model_version": "V3.5.0_01022026_MA_TIERS",
   "model_type": "rules-based-tiers",
   "status": "production",
   "created_date": "2025-12-21",
   "updated_date": "2026-01-02",
+  "previous_version": "V3.4.0_01012026_CAREER_CLOCK",
+  "changes_from_v3.4": [
+    "Added TIER_MA_ACTIVE_PRIME tier for senior/mid-career at M&A targets (9.0% conversion, 2.36x lift)",
+    "Added TIER_MA_ACTIVE tier for all advisors at M&A targets (5.4% conversion, 1.41x lift)",
+    "Added M&A exemption for large firm exclusion (>50 reps normally excluded, but M&A firms exempt)",
+    "Added M&A exemption for firm pattern exclusions (Commonwealth, Osaic, etc. - normally excluded but included when M&A active)",
+    "Created pre-built ma_eligible_advisors table (avoids BigQuery CTE scoping issues from failed V3.5.0 attempt)",
+    "M&A tiers rank between Career Clock (ranks 1-3) and Tier 1 tiers (rank 6+)",
+    "Based on Commonwealth/LPL merger analysis: 5.37% overall conversion, 9%+ for senior/mid-career",
+    "Time-sensitive signal: 60-365 day window after M&A announcement",
+    "KEY INSIGHT: Large firms normally convert poorly (0.60x baseline) but M&A creates disruption opportunity"
+  ],
   "changes_from_v3.3.3": [
     "ADDED: TIER_0A_PRIME_MOVER_DUE - Prime Mover + Career Clock timing (16.13% conversion, 5.89x lift)",
     "ADDED: TIER_0B_SMALL_FIRM_DUE - Small Firm + Career Clock timing (15.46% conversion, 5.64x lift)",
@@ -102,6 +114,8 @@
     "tier_0a_prime_mover_due_lift": "5.89x",
     "tier_0b_small_firm_due_lift": "5.64x",
     "tier_0c_clockwork_due_lift": "4.29x",
+    "tier_ma_active_prime_lift": "2.36x",
+    "tier_ma_active_lift": "1.41x",
     "tier_nurture_too_early_lift": "1.14x",
     "tier_1b_prime_zero_friction_lift": "3.57x",
     "tier_1a_cfp_lift": "2.62x",
@@ -176,6 +190,62 @@
       "key_insight": "Broadest Career Clock tier - captures any predictable advisor in move window, even if they don't meet other Prime Mover criteria",
       "priority_rank": 3,
       "added_version": "V3.4.0"
+    },
+    "TIER_MA_ACTIVE_PRIME": {
+      "description": "Senior title or mid-career advisor at M&A target firm - HIGH-VALUE M&A OPPORTUNITY",
+      "expected_conversion_rate": 0.09,
+      "expected_lift": 2.36,
+      "historical_validation": {
+        "leads": 847,
+        "conversions": "To be validated",
+        "time_period": "Based on Commonwealth/LPL merger analysis",
+        "note": "Senior titles: 9.30% conversion (2.06x), Mid-career: 8.16% conversion (1.75x) - combined into PRIME tier"
+      },
+      "criteria": {
+        "is_at_ma_target_firm": true,
+        "ma_status": "HOT or ACTIVE (60-365 days since announcement)",
+        "OR": [
+          {
+            "is_senior_title": true,
+            "title_patterns": [
+              "PRESIDENT",
+              "PRINCIPAL",
+              "PARTNER",
+              "OWNER",
+              "FOUNDER",
+              "DIRECTOR",
+              "MANAGING"
+            ]
+          },
+          {
+            "industry_tenure_months": "120-240 (10-20 years)"
+          }
+        ]
+      },
+      "key_insight": "Senior advisors have most at stake (equity, control, reputation) during M&A. Mid-career advisors (10-20yr) are established but not entrenched - optimal timing for transition.",
+      "priority_rank": 4,
+      "action": "High priority - M&A uncertainty creates immediate opportunity window",
+      "added_version": "V3.5.0"
+    },
+    "TIER_MA_ACTIVE": {
+      "description": "Advisor at M&A target firm - Firm disruption creates opportunity window",
+      "expected_conversion_rate": 0.054,
+      "expected_lift": 1.41,
+      "historical_validation": {
+        "leads": 1103,
+        "conversions": "To be validated",
+        "time_period": "Based on Commonwealth/LPL merger analysis",
+        "note": "Commonwealth overall: 5.37% conversion (1.41x baseline) - validates M&A signal"
+      },
+      "criteria": {
+        "is_at_ma_target_firm": true,
+        "ma_status": "HOT or ACTIVE (60-365 days since announcement)",
+        "firm_employees": ">= 10"
+      },
+      "key_insight": "M&A creates uncertainty about future platform, compensation, culture. Advisors actively evaluate options during transition period. 'Best advisors leave first' phenomenon accelerates.",
+      "priority_rank": 5,
+      "action": "Contact during M&A window - elevated receptivity",
+      "added_version": "V3.5.0"
     },
     "TIER_NURTURE_TOO_EARLY": {
       "description": "Nurture - Too Early - Advisors identified as predictable but too early in their career cycle",

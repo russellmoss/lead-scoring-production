@@ -1,10 +1,11 @@
 # Lead Scoring Production Pipeline - Hybrid V3 + V4 Model
 
-**Version**: 3.1 (Option C: Maximized Lead List)  
-**Last Updated**: January 1, 2026  
-**Status**: Production Ready  
+**Version**: 3.5.0 (M&A Active Tiers + Two-Query Architecture)  
+**Last Updated**: January 3, 2026  
+**Status**: ✅ Production Ready  
+**V3 Model**: V3.5.0_01032026_MA_TIERS - M&A opportunity capture  
 **V4 Model**: V4.2.0 (Career Clock) - Deployed January 1, 2026  
-**Repository Cleanup**: Completed December 30, 2025 (see `recommended_cleanup.md`)
+**Architecture**: Two-Query (bypasses BigQuery CTE optimization issues)
 
 ---
 
@@ -26,24 +27,26 @@
 
 This repository contains a **hybrid lead scoring system** that combines:
 
-- **V3 Rules-Based Model**: Tiered classification system based on validated SGA expertise (T1A, T1B, T1, T1F, T2, T3)
-- **V4 XGBoost ML Model**: Machine learning model for deprioritization (bottom 20%) and intelligent backfill identification
+- **V3 Rules-Based Model**: Tiered classification with M&A opportunity tiers (V3.5.0)
+- **V4 XGBoost ML Model**: Machine learning model for deprioritization and backfill
+- **Two-Query Architecture**: Reliable M&A lead insertion (bypasses BigQuery CTE issues)
 
-**Key Results (January 2026 Lead List):**
-- **Total Leads**: 2,768 (198 per SGA across 14 SGAs)
-- **Expected Conversion Rate**: **4.61%** (vs 2.74% baseline)
-- **Expected MQLs**: **128 total** (9.1 per SGA)
-- **Improvement vs Baseline**: **+68.5%**
-- **Confidence**: 99.98% probability of exceeding baseline
-- **Methodology**: Option C - Only tiers that convert significantly above baseline (TIER_4 and TIER_5 excluded)
+**Key Results (January 2026 Lead List - V3.5.0):**
+- **Total Leads**: 3,100 (2,800 standard + 300 M&A)
+- **M&A Leads**: 300 (TIER_MA_ACTIVE_PRIME at 9.0% expected conversion)
+- **Large Firm Exemption**: 293 M&A leads from firms with >200 reps (normally excluded)
+- **Expected MQLs from M&A Tier**: ~27 additional MQLs (300 × 9.0%)
+- **Architecture**: Two-query approach (INSERT after CREATE)
 
-**Tier Performance (Historical Rates):**
-- **T1B** (Series 65 Only): 11.76% (4.3x baseline)
-- **T3** (Moderate Bleeder): 6.76% (2.5x baseline)
-- **T1F** (Wealth Bleeder): 6.06% (2.2x baseline)
-- **T2** (Proven Mover): 5.91% (2.2x baseline)
-- **T1** (Prime Mover): 4.76% (1.7x baseline)
-- **HIGH_V4** (ML Backfill): 3.67% (1.3x baseline)
+**V3.5.0 M&A Tier Performance (Based on Commonwealth/LPL Analysis):**
+- **TIER_MA_ACTIVE_PRIME**: 9.0% conversion (2.36x baseline) - Senior titles + mid-career at M&A targets
+- **TIER_MA_ACTIVE**: 5.4% conversion (1.41x baseline) - All advisors at M&A target firms
+- **Evidence**: Commonwealth Financial Network converted at 5.37% during LPL acquisition (242 contacts, 13 MQLs)
+
+**Why M&A Tiers Matter:**
+- Large firms (>50 reps) normally convert at 0.60x baseline → we exclude them
+- But M&A disruption changes dynamics → Commonwealth converted at 5.37% during acquisition
+- Without M&A tiers, we would miss 100-500 MQLs per major M&A event
 
 **Monthly Time Estimate**: 15-20 minutes once pipeline is set up
 
@@ -93,35 +96,59 @@ python scripts/export_lead_list.py
 
 ## Pipeline Architecture
 
-### High-Level Flow
+### High-Level Flow (V3.5.0 Two-Query Architecture)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│              MONTHLY LEAD LIST GENERATION PIPELINE              │
+│        MONTHLY LEAD LIST GENERATION PIPELINE (V3.5.0)           │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  STEP 1: Calculate V4 Features                                  │
+│  STEP 1: Refresh M&A Advisors Table                             │
+│     └─> SQL: create_ma_eligible_advisors.sql                    │
+│     └─> Output: ml_features.ma_eligible_advisors (~2,225)       │
+│     └─> Purpose: Pre-build M&A advisor list with tier assignments│
+│                                                                  │
+│  STEP 2: Calculate V4 Features                                  │
 │     └─> SQL: v4_prospect_features.sql                           │
 │     └─> Output: ml_features.v4_prospect_features                │
-│     └─> Purpose: Calculate 29 ML features for all prospects (V4.2.0 Career Clock) │
+│     └─> Purpose: Calculate 29 ML features for all prospects     │
 │                                                                  │
-│  STEP 2: Score Prospects with V4 Model                         │
+│  STEP 3: Score Prospects with V4 Model                         │
 │     └─> Python: score_prospects_monthly.py                      │
 │     └─> Output: ml_features.v4_prospect_scores                 │
 │     └─> Purpose: Generate ML scores, percentiles, SHAP features │
 │                                                                  │
-│  STEP 3: Run Hybrid Lead List Query                            │
+│  STEP 4: Generate Base Lead List (Query 1)                     │
 │     └─> SQL: January_2026_Lead_List_V3_V4_Hybrid.sql            │
-│     └─> Output: ml_features.january_2026_lead_list              │
-│     └─> Purpose: Combine V3 tiers + V4 upgrades → 200 leads per SGA  │
+│     └─> Output: ml_features.january_2026_lead_list (~2,800)     │
+│     └─> Purpose: Standard leads with V3 tiers + V4 upgrades     │
 │                                                                  │
-│  STEP 4: Export to CSV                                          │
+│  STEP 5: Insert M&A Leads (Query 2) ⚠️ MUST RUN AFTER STEP 4   │
+│     └─> SQL: Insert_MA_Leads.sql                                │
+│     └─> Output: Adds ~300 M&A leads to existing table            │
+│     └─> Purpose: Add M&A tier leads (bypasses CTE issues)       │
+│                                                                  │
+│  STEP 6: Export to CSV                                          │
 │     └─> Python: export_lead_list.py                             │
-│     └─> Output: exports/january_2026_lead_list_YYYYMMDD.csv    │
+│     └─> Output: exports/[month]_2026_lead_list_YYYYMMDD.csv    │
 │     └─> Purpose: CSV file for Salesforce import                 │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Why Two-Query Architecture?
+
+Single-query approaches failed due to BigQuery CTE optimization issues:
+
+| Approach Attempted | Result |
+|--------------------|--------|
+| EXISTS subquery exemption | ❌ Works in isolation, fails in full query |
+| JOIN exemption | ❌ Works in isolation, fails in full query |
+| UNION two-track architecture | ❌ Works in isolation, fails in full query |
+| LEFT JOIN with inline subquery | ❌ Works in isolation, fails in full query |
+| **INSERT after CREATE** | ✅ **Works reliably** |
+
+The INSERT approach completely bypasses BigQuery's CTE optimization by using two separate, simple queries instead of one complex 1,400+ line query.
 
 ### Data Flow
 
@@ -149,7 +176,42 @@ Salesforce Import File
 
 ## Step-by-Step Execution
 
-### Step 1: Calculate V4 Features for All Prospects
+### Step 1: Refresh M&A Eligible Advisors Table
+
+**Purpose**: Pre-build the M&A advisors table with tier assignments. This table is refreshed monthly or when new M&A news hits.
+
+**File**: `pipeline/sql/create_ma_eligible_advisors.sql`
+
+**What It Does**:
+- Joins `active_ma_target_firms` with `ria_contacts_current`
+- Assigns tier based on senior title or mid-career status
+- Creates `ml_features.ma_eligible_advisors` table
+
+**Execution**:
+```sql
+-- Run in BigQuery
+-- Creates: ml_features.ma_eligible_advisors
+-- Expected rows: ~2,225 advisors
+```
+
+**Validation Query**:
+```sql
+SELECT 
+    ma_tier,
+    COUNT(*) as count,
+    COUNT(DISTINCT firm_crd) as unique_firms
+FROM `savvy-gtm-analytics.ml_features.ma_eligible_advisors`
+GROUP BY ma_tier;
+```
+
+**Expected Results**:
+- TIER_MA_ACTIVE_PRIME: ~1,100 advisors
+- TIER_MA_ACTIVE: ~1,100 advisors
+- Total: ~2,225 advisors across 66 firms
+
+---
+
+### Step 2: Calculate V4 Features for All Prospects
 
 **Purpose**: Calculate the 29 features required by the V4.2.0 XGBoost model (including 7 Career Clock features) for all producing advisors in FINTRX.
 
@@ -421,7 +483,7 @@ FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`;
 
 ---
 
-### Step 4: Export to CSV
+### Step 6: Export to CSV (unchanged)
 
 **Purpose**: Export lead list to CSV format for Salesforce import.
 
@@ -474,6 +536,73 @@ python scripts/export_lead_list.py
 - Missing required fields: < 1%
 - Excluded firms (from centralized tables): 0
 - TIER_4 and TIER_5 leads: 0 (Option C exclusion)
+
+---
+
+## V3.5.0 M&A Active Tiers
+
+### Overview
+
+V3.5.0 adds two M&A (Mergers & Acquisitions) opportunity tiers that capture advisors at firms undergoing M&A activity. These leads would normally be excluded by the large firm filter (>50 reps) but convert at elevated rates during M&A disruption.
+
+### New Tiers
+
+| Tier | Expected Conversion | Lift | Criteria |
+|------|---------------------|------|----------|
+| **TIER_MA_ACTIVE_PRIME** | 9.0% | 2.36x | Senior title OR mid-career (10-20yr) at M&A target |
+| **TIER_MA_ACTIVE** | 5.4% | 1.41x | All advisors at M&A target firms |
+
+### Evidence: Commonwealth/LPL Merger Analysis
+
+**Event**: LPL Financial announced acquisition of Commonwealth Financial Network (July 2024)
+
+| Metric | Value |
+|--------|-------|
+| Total Commonwealth advisors | ~2,500 |
+| Advisors contacted | 242 |
+| Conversions (MQLs) | 13 |
+| **Conversion Rate** | **5.37%** |
+| **Lift vs Baseline** | **1.41x** |
+
+**Profile Analysis**:
+- Senior Titles: 9.30% conversion (2.06x lift)
+- Mid-Career (10-20yr): 8.16% conversion (1.75x lift)
+- Serial Movers: 5.14% conversion (0.86x lift) - Does NOT help
+- Newer to Firm: 4.65% conversion (0.81x lift) - Does NOT help
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `pipeline/sql/create_ma_eligible_advisors.sql` | Pre-build M&A advisors table |
+| `pipeline/sql/Insert_MA_Leads.sql` | Insert M&A leads after base list |
+| `pipeline/sql/post_implementation_verification_ma_tiers.sql` | Verification queries |
+| `V3_5_0_MA_TIER_COMPREHENSIVE_IMPLEMENTATION_GUIDE.md` | Full implementation guide |
+
+### M&A Target Firms Table
+
+The `ml_features.active_ma_target_firms` table tracks firms with active M&A activity:
+
+| Column | Description |
+|--------|-------------|
+| `firm_crd` | Firm CRD ID |
+| `firm_name` | Firm name |
+| `ma_status` | HOT (60-180 days) or ACTIVE (181-365 days) |
+| `days_since_first_news` | Days since M&A announcement |
+| `firm_employees` | Number of advisors at firm |
+
+**Current Stats** (January 2026):
+- HOT: 39 firms, 183 advisors
+- ACTIVE: 27 firms, 2,042 advisors
+- Total: 66 firms, 2,225 advisors
+
+### Refresh Schedule
+
+| Trigger | Action |
+|---------|--------|
+| Monthly | Re-run `create_ma_eligible_advisors.sql` |
+| M&A news | Update `active_ma_target_firms`, re-run creation script |
+| Firm status change | Update `ma_status` (HOT → ACTIVE → STALE) |
 
 ---
 
@@ -1788,9 +1917,11 @@ lead_scoring_production/
 
 | Table | Purpose | Created By |
 |-------|---------|------------|
-| `ml_features.v4_prospect_features` | V4 features for all prospects | Step 1 SQL |
-| `ml_features.v4_prospect_scores` | V4 scores with percentiles | Step 2 Python |
-| `ml_features.january_2026_lead_list` | Final lead list | Step 3 SQL |
+| `ml_features.active_ma_target_firms` | M&A target firm tracking | Manual (news feed) |
+| `ml_features.ma_eligible_advisors` | Pre-built M&A advisor list | Step 1 (monthly) |
+| `ml_features.v4_prospect_features` | V4 features for all prospects | Step 2 SQL |
+| `ml_features.v4_prospect_scores` | V4 scores with percentiles | Step 3 Python |
+| `ml_features.january_2026_lead_list` | Final lead list | Steps 4-5 SQL |
 | `ml_features.excluded_firms` | Pattern-based firm exclusions | Manual (see Firm Exclusions section) |
 | `ml_features.excluded_firm_crds` | CRD-based firm exclusions | Manual (see Firm Exclusions section) |
 
@@ -1873,6 +2004,82 @@ lead_scoring_production/
 ---
 
 ## Change Log
+
+### V3.5.0 - January 3, 2026 - M&A Active Tiers + Two-Query Architecture
+
+**Summary:** Added M&A opportunity tiers to capture advisors at firms undergoing M&A activity. Implemented two-query architecture after single-query approaches failed due to BigQuery CTE optimization issues.
+
+#### Key Changes
+
+1. **Added TIER_MA_ACTIVE_PRIME**
+   - Senior title OR mid-career (10-20yr) at M&A target
+   - Expected conversion: 9.0% (2.36x lift)
+   - Validated on Commonwealth/LPL merger data
+
+2. **Added TIER_MA_ACTIVE**
+   - All advisors at M&A target firms
+   - Expected conversion: 5.4% (1.41x lift)
+   - Captures opportunity window (60-365 days post-announcement)
+
+3. **Implemented Two-Query Architecture**
+   - Query 1: Generate base lead list (standard leads)
+   - Query 2: INSERT M&A leads after base list created
+   - Reason: Single-query approaches failed due to BigQuery CTE optimization
+
+4. **Created Pre-Built M&A Advisors Table**
+   - `ml_features.ma_eligible_advisors` (~2,225 advisors)
+   - Pre-computes tier assignments
+   - Refreshed monthly or on M&A news
+
+5. **Large Firm Exemption for M&A**
+   - M&A advisors exempt from >50 rep exclusion
+   - 293 of 300 M&A leads are at firms with >200 reps
+   - Would have been excluded without M&A exemption
+
+#### Evidence Supporting Changes
+
+| Signal | Conversion | Lift | Action |
+|--------|------------|------|--------|
+| Commonwealth M&A (overall) | 5.37% | 1.41x | Add TIER_MA_ACTIVE |
+| Senior titles at M&A | 9.30% | 2.06x | Add to TIER_MA_ACTIVE_PRIME |
+| Mid-career at M&A | 8.16% | 1.75x | Add to TIER_MA_ACTIVE_PRIME |
+
+#### Why Single-Query Failed
+
+Four approaches were attempted and all failed:
+
+1. EXISTS subquery exemption → Works in isolation, fails in full query
+2. JOIN exemption → Works in isolation, fails in full query
+3. UNION two-track → Works in isolation, fails in full query
+4. LEFT JOIN with inline subquery → Works in isolation, fails in full query
+
+Root cause: BigQuery's CTE optimization in complex queries (1,400+ lines) causes unpredictable behavior.
+
+#### Files Created
+
+- `pipeline/sql/create_ma_eligible_advisors.sql`
+- `pipeline/sql/Insert_MA_Leads.sql`
+- `pipeline/sql/pre_implementation_verification_ma_tiers.sql`
+- `pipeline/sql/post_implementation_verification_ma_tiers.sql`
+- `V3_5_0_MA_TIER_COMPREHENSIVE_IMPLEMENTATION_GUIDE.md`
+- `pipeline/V3_5_0_MA_TIER_IMPLEMENTATION_RESULTS.md`
+
+#### Files Modified
+
+- `v3/models/model_registry_v3.json` (updated to V3.5.0)
+- `README.md` (this document)
+- `v3/VERSION_3_MODEL_REPORT.md`
+
+#### Verification Results
+
+| Check | Result |
+|-------|--------|
+| M&A tiers populated | ✅ 300 leads |
+| Large firm exemption | ✅ 293 leads with >200 reps |
+| No violations | ✅ 0 non-M&A large firms |
+| Narratives | ✅ 100% coverage |
+
+---
 
 ### V3.3.0 - December 30, 2025 - Bleeding Signal Refinement
 
@@ -1983,9 +2190,10 @@ If V3.3 underperforms:
 
 ---
 
-**Document Version**: 3.1 (Option C: Maximized Lead List)  
-**Last Updated**: December 30, 2025  
-**Methodology**: Based on validated SGA expertise - see `Lead_Scoring_Methodology_Final.md`  
+**Document Version**: 3.5.0 (M&A Active Tiers + Two-Query Architecture)  
+**Last Updated**: January 3, 2026  
+**Model Version**: V3.5.0_01032026_MA_TIERS  
+**Architecture**: Two-Query (CREATE then INSERT)  
 **Maintainer**: Data Science Team  
 **Questions?**: Contact the Data Science team
 

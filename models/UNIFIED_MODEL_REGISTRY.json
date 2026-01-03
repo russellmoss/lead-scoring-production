@@ -1,36 +1,160 @@
 {
-  "registry_version": "1.0",
+  "registry_version": "2.0",
+  "last_updated": "2026-01-03",
   "created_date": "2025-12-30",
   "purpose": "Unified registry for all lead scoring models (V3 and V4)",
   "current_production": {
-    "v3": "v3.3.0",
-    "v4": "v4.1.0_r3",
+    "v3": "v3.5.0",
+    "v4": "v4.2.0",
     "deployment_strategy": "hybrid"
   },
   "model_registries": {
     "v3": {
       "registry_file": "v3/models/model_registry_v3.json",
-      "current_version": "v3.3.0",
+      "current_version": "v3.5.0",
       "model_type": "rules-based-tiers",
       "status": "production",
-      "last_updated": "2025-12-30"
+      "last_updated": "2026-01-03"
     },
     "v4": {
       "registry_file": "v4/models/registry.json",
-      "current_version": "v4.1.0_r3",
+      "current_version": "v4.2.0",
       "model_type": "XGBoost",
       "status": "production",
-      "last_updated": "2025-12-30"
+      "last_updated": "2026-01-01"
+    }
+  },
+  "active_models": {
+    "v3": {
+      "model_id": "lead-scoring-v3.5.0",
+      "model_version": "V3.5.0_01032026_MA_TIERS",
+      "previous_version": "V3.4.0_01012026_CAREER_CLOCK",
+      "status": "PRODUCTION",
+      "deployed_date": "2026-01-03",
+      "architecture": "two-query",
+      "description": "Rules-based tiered classification with M&A opportunity tiers",
+      "changes_from_v3.4": [
+        "Added TIER_MA_ACTIVE_PRIME tier (9.0% conversion, 2.36x lift)",
+        "Added TIER_MA_ACTIVE tier (5.4% conversion, 1.41x lift)",
+        "Implemented two-query architecture (INSERT after CREATE)",
+        "Created pre-built ma_eligible_advisors table",
+        "Added large firm exemption for M&A advisors",
+        "Added M&A-specific narratives",
+        "Bypassed BigQuery CTE optimization issues"
+      ],
+      "tier_definitions": {
+        "TIER_MA_ACTIVE_PRIME": {
+          "description": "Senior title or mid-career advisor at M&A target firm",
+          "expected_conversion": 0.09,
+          "expected_lift": 2.36,
+          "priority_rank": 4,
+          "criteria": {
+            "is_at_ma_target_firm": true,
+            "OR": [
+              {"is_senior_title": true},
+              {"industry_tenure_months": "120-240"}
+            ]
+          },
+          "validation": {
+            "source": "Commonwealth/LPL merger analysis",
+            "sample_size": 43,
+            "actual_conversion": 0.093
+          }
+        },
+        "TIER_MA_ACTIVE": {
+          "description": "All advisors at M&A target firms",
+          "expected_conversion": 0.054,
+          "expected_lift": 1.41,
+          "priority_rank": 5,
+          "criteria": {
+            "is_at_ma_target_firm": true
+          },
+          "validation": {
+            "source": "Commonwealth/LPL merger analysis",
+            "sample_size": 242,
+            "actual_conversion": 0.0537
+          }
+        }
+      },
+      "files": {
+        "main_query": "pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql",
+        "ma_insert_query": "pipeline/sql/Insert_MA_Leads.sql",
+        "ma_advisors_table": "pipeline/sql/create_ma_eligible_advisors.sql",
+        "verification": "pipeline/sql/post_implementation_verification_ma_tiers.sql",
+        "implementation_guide": "V3_5_0_MA_TIER_COMPREHENSIVE_IMPLEMENTATION_GUIDE.md",
+        "model_registry": "v3/models/model_registry_v3.json"
+      },
+      "bigquery_tables": {
+        "lead_list": "ml_features.january_2026_lead_list",
+        "ma_eligible_advisors": "ml_features.ma_eligible_advisors",
+        "active_ma_target_firms": "ml_features.active_ma_target_firms"
+      },
+      "execution_order": [
+        "1. Run create_ma_eligible_advisors.sql",
+        "2. Run v4_prospect_features.sql",
+        "3. Run score_prospects_monthly.py",
+        "4. Run January_2026_Lead_List_V3_V4_Hybrid.sql",
+        "5. Run Insert_MA_Leads.sql (MUST be after step 4)",
+        "6. Run export_lead_list.py"
+      ]
+    },
+    "v4": {
+      "model_id": "lead-scoring-v4.2.0",
+      "model_version": "V4.2.0_CAREER_CLOCK",
+      "status": "PRODUCTION",
+      "deployed_date": "2026-01-01",
+      "description": "XGBoost ML model with Career Clock features",
+      "files": {
+        "model": "v4/models/v4.2.0/model.pkl",
+        "config": "v4/models/v4.2.0/model.json",
+        "features": "v4/data/v4.2.0/final_features.json"
+      }
     }
   },
   "production_models": {
+    "v3.5.0": {
+      "model_id": "lead-scoring-v3.5.0",
+      "model_version": "V3.5.0_01032026_MA_TIERS",
+      "model_type": "rules-based-tiers",
+      "status": "production",
+      "created_date": "2025-12-21",
+      "updated_date": "2026-01-03",
+      "registry_location": "v3/models/model_registry_v3.json",
+      "documentation": "v3/VERSION_3_MODEL_REPORT.md",
+      "production_sql": "pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql",
+      "ma_insert_sql": "pipeline/sql/Insert_MA_Leads.sql",
+      "key_features": [
+        "M&A Active Tiers (TIER_MA_ACTIVE_PRIME, TIER_MA_ACTIVE)",
+        "Two-query architecture (bypasses BigQuery CTE issues)",
+        "Pre-built ma_eligible_advisors table",
+        "Large firm exemption for M&A advisors",
+        "Career Clock tiers (from V3.4.0)",
+        "Zero Friction + Sweet Spot tiers"
+      ],
+      "top_tier_performance": {
+        "TIER_0A_PRIME_MOVER_DUE": {
+          "conversion_rate": 0.1613,
+          "lift": 5.89
+        },
+        "TIER_MA_ACTIVE_PRIME": {
+          "conversion_rate": 0.09,
+          "lift": 2.36
+        },
+        "TIER_1A_PRIME_MOVER_CFP": {
+          "conversion_rate": 0.1644,
+          "lift": 4.30
+        }
+      }
+    },
     "v3.3.0": {
       "model_id": "lead-scoring-v3.3.0",
       "model_version": "V3.3.0_12302025_BLEEDING_SIGNAL_REFINEMENT",
       "model_type": "rules-based-tiers",
-      "status": "production",
+      "status": "deprecated",
       "created_date": "2025-12-21",
       "updated_date": "2025-12-30",
+      "deprecated_date": "2026-01-03",
+      "deprecated_reason": "Superseded by V3.5.0 with M&A tiers",
       "registry_location": "v3/models/model_registry_v3.json",
       "documentation": "v3/VERSION_3_MODEL_REPORT.md",
       "production_sql": "v3/sql/generate_lead_list_v3.3.0.sql",
@@ -51,13 +175,49 @@
         }
       }
     },
+    "v4.2.0": {
+      "version": "v4.2.0",
+      "model_type": "XGBoost",
+      "status": "production",
+      "training_date": "2026-01-01",
+      "deployed_date": "2026-01-01",
+      "registry_location": "v4/models/registry.json",
+      "documentation": "v4/VERSION_4_MODEL_REPORT.md",
+      "production_sql": "v4/sql/production_scoring_v42.sql",
+      "inference_script": "v4/inference/lead_scorer_v4.py",
+      "features": 29,
+      "new_features": [
+        "cc_completed_jobs",
+        "cc_tenure_cv",
+        "cc_pct_through_cycle",
+        "cc_is_clockwork",
+        "cc_is_in_move_window",
+        "cc_is_too_early",
+        "cc_months_until_window"
+      ],
+      "metrics": {
+        "test_auc_roc": 0.6258,
+        "test_auc_pr": 0.0701,
+        "top_decile_lift": 2.03,
+        "bottom_20_pct_rate": 0.0117,
+        "train_test_auc_gap": 0.075
+      },
+      "comparison": {
+        "vs_v4.1.0_r3": "+0.60% AUC, -16.4% bottom 20% rate",
+        "vs_v3.5.0": "Hybrid deployment (V3 for prioritization, V4 for deprioritization)"
+      },
+      "deployment_strategy": "hybrid",
+      "use_case": "deprioritization_filter"
+    },
     "v4.1.0_r3": {
       "version": "v4.1.0",
       "revision": "R3",
       "model_type": "XGBoost",
-      "status": "production",
+      "status": "deprecated",
       "training_date": "2025-12-30",
       "deployed_date": "2025-12-30",
+      "deprecated_date": "2026-01-01",
+      "deprecated_reason": "Superseded by V4.2.0 with Career Clock features",
       "registry_location": "v4/models/registry.json",
       "documentation": "v4/VERSION_4_MODEL_REPORT.md",
       "production_sql": "v4/sql/production_scoring_v41.sql",
@@ -105,13 +265,16 @@
     }
   },
   "hybrid_deployment": {
-    "description": "V3.3.0 (rules-based) for prioritization + V4.1.0 R3 (XGBoost) for deprioritization",
+    "description": "V3.5.0 (rules-based with M&A tiers) for prioritization + V4.2.0 (XGBoost with Career Clock) for deprioritization",
     "lead_list_sql": "pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql",
+    "ma_insert_sql": "pipeline/sql/Insert_MA_Leads.sql",
+    "architecture": "two-query",
     "expected_performance": {
-      "blended_conversion_rate": "4.61%",
-      "baseline_conversion_rate": "2.74%",
-      "improvement": "+68.5%",
-      "expected_mqls_per_sga": 9.1
+      "blended_conversion_rate": "~5.0%",
+      "baseline_conversion_rate": "3.82%",
+      "improvement": "+30%",
+      "expected_mqls_per_sga": 10.5,
+      "ma_tier_contribution": "+27 MQLs from 300 M&A leads"
     }
   },
   "documentation": {
@@ -126,6 +289,15 @@
     "v3_generation": "v3/docs/LEAD_LIST_GENERATION_GUIDE.md",
     "pipeline_monthly": "pipeline/Monthly_Lead_List_Generation_V3_V4_Hybrid.md"
   },
-  "notes": "This unified registry provides a single source of truth for all model versions. For detailed information, refer to the individual model registries and documentation files."
+  "sftp_transition": {
+    "status": "PENDING",
+    "notes": "When SFTP feed is enabled, update source table references in all SQL files",
+    "files_to_update": [
+      "pipeline/sql/v4_prospect_features.sql",
+      "pipeline/sql/create_ma_eligible_advisors.sql",
+      "pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql"
+    ]
+  },
+  "notes": "This unified registry provides a single source of truth for all model versions. V3.5.0 uses two-query architecture to bypass BigQuery CTE optimization issues. For detailed information, refer to the individual model registries and documentation files."
 }
 

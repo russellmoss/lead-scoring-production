@@ -1,7 +1,8 @@
 -- ============================================================================
--- JANUARY 2026 LEAD LIST GENERATOR (V3.3.3 + V4.1.0 R3 HYBRID)
+-- JANUARY 2026 LEAD LIST GENERATOR (V3.4.0 + V4.1.0 R3 HYBRID)
 -- ============================================================================
--- Version: 2.4 with V3.3.3 Zero Friction + Sweet Spot Tiers (Updated 2026-01-01)
+-- Version: 3.0 with V3.4.0 Career Clock + V3.3.3 Zero Friction (Updated 2026-01-03)
+-- NOTE: M&A tiers are added via separate INSERT query (Insert_MA_Leads.sql)
 -- 
 -- V4.1 INTEGRATION CHANGES:
 -- - Scores table: ml_features.v4_prospect_scores (SAME NAME, updated with V4.1 scores)
@@ -220,9 +221,9 @@ base_prospects AS (
       AND c.PRIMARY_FIRM_START_DATE IS NOT NULL AND c.PRIMARY_FIRM_NAME IS NOT NULL
       AND c.PRIMARY_FIRM IS NOT NULL
       AND c.PRODUCING_ADVISOR = TRUE
-      -- Exclude matched patterns and CRDs
-      AND ef.firm_pattern IS NULL
-      AND ec.firm_crd IS NULL
+      -- Firm exclusions (M&A firms will be added via separate INSERT query)
+      AND ef.firm_pattern IS NULL                    -- Not on exclusion list
+      AND ec.firm_crd IS NULL                        -- Not on CRD exclusion list
       -- Title exclusions
       AND NOT (
           UPPER(c.TITLE_NAME) LIKE '%FINANCIAL SOLUTIONS ADVISOR%'
@@ -243,6 +244,7 @@ base_prospects AS (
 enriched_prospects AS (
     SELECT 
         bp.*,
+        -- Enrichment fields
         COALESCE(am.total_firms, 1) as total_firms,
         COALESCE(am.total_firms, 1) - 1 as num_prior_firms,
         COALESCE(am.moves_3yr, 0) as moves_3yr,
@@ -450,9 +452,11 @@ scored_prospects AS (
             ELSE NULL
         END as cc_months_until_window,
         
-        -- Score tier (V3.4.0 UPDATED - Career Clock tiers added)
+        -- Score tier (V3.4.0 - Career Clock tiers)
         CASE 
+            -- ============================================================
             -- TIER 0: Career Clock Priority Tiers (V3.4.0)
+            -- ============================================================
             WHEN ccs.tenure_cv < 0.5 
                  AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
                  AND ep.tenure_months BETWEEN 12 AND 48
@@ -517,48 +521,82 @@ scored_prospects AS (
             ELSE 'STANDARD'
         END as score_tier,
         
-        -- Priority rank (V3.3.3 UPDATED)
+        -- Priority rank (V3.4.0)
         CASE 
-            -- T1B_PRIME: Highest priority (13.64%)
+            -- Career Clock Tiers (V3.4.0) - Highest priority
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.tenure_months BETWEEN 12 AND 48
+                 AND ep.industry_tenure_months BETWEEN 60 AND 180
+                 AND ep.firm_net_change_12mo != 0
+                 AND ep.is_wirehouse = 0
+            THEN 1  -- TIER_0A_PRIME_MOVER_DUE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.firm_rep_count <= 10
+                 AND ep.is_wirehouse = 0
+            THEN 2  -- TIER_0B_SMALL_FIRM_DUE
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.is_wirehouse = 0
+            THEN 3  -- TIER_0C_CLOCKWORK_DUE
+            -- T1B_PRIME: Fourth priority (13.64%)
             WHEN has_series_65_only = 1
                  AND has_portable_custodian = 1
                  AND firm_rep_count <= 10
                  AND firm_net_change_12mo <= -3
                  AND has_cfp = 0
                  AND is_wirehouse = 0
-            THEN 1
-            -- T1A: Second priority (10.00%)
-            WHEN (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years >= 5 AND firm_net_change_12mo < 0 AND has_cfp = 1 AND is_wirehouse = 0) THEN 2
-            -- T1G_ENHANCED: Third priority (9.09%)
+            THEN 6
+            -- T1A: Seventh priority (10.00%)
+            WHEN (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years >= 5 AND firm_net_change_12mo < 0 AND has_cfp = 1 AND is_wirehouse = 0) THEN 7
+            -- T1G_ENHANCED: Eighth priority (9.09%)
             WHEN (industry_tenure_months BETWEEN 60 AND 180 
                   AND avg_account_size BETWEEN 500000 AND 2000000
                   AND firm_net_change_12mo > -3 
-                  AND is_wirehouse = 0) THEN 3
-            -- T1B: Fourth priority (5.49%)
+                  AND is_wirehouse = 0) THEN 8
+            -- T1B: Ninth priority (5.49%)
             WHEN (((tenure_years BETWEEN 1 AND 3 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND firm_rep_count <= 50 AND is_wirehouse = 0)
                   OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
                   OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0))
-                  AND has_series_65_only = 1) THEN 4
-            -- T1G_REMAINDER: Fifth priority (5.08%)
+                  AND has_series_65_only = 1) THEN 9
+            -- T1G_REMAINDER: Tenth priority (5.08%)
             WHEN (industry_tenure_months BETWEEN 60 AND 180 
                   AND avg_account_size >= 250000 
                   AND (avg_account_size < 500000 OR avg_account_size > 2000000)
                   AND firm_net_change_12mo > -3 
-                  AND is_wirehouse = 0) THEN 5
+                  AND is_wirehouse = 0) THEN 10
             WHEN ((tenure_years BETWEEN 1 AND 3 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND firm_rep_count <= 50 AND is_wirehouse = 0)
                   OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0)) THEN 6
-            WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 7
-            WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 6
-            WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 6
+                  OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0)) THEN 11
+            WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 12
+            WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 13
+            WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 14
             -- OPTION C: TIER_4 and TIER_5 excluded (map to 99)
             WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 99  -- TIER_4 excluded
             WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 99  -- TIER_5 excluded
             ELSE 99
         END as priority_rank,
         
-        -- Expected conversion rate (V3.3.3 UPDATED)
+        -- Expected conversion rate (V3.4.0)
         CASE 
+            -- Career Clock Tiers (V3.4.0)
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.tenure_months BETWEEN 12 AND 48
+                 AND ep.industry_tenure_months BETWEEN 60 AND 180
+                 AND ep.firm_net_change_12mo != 0
+                 AND ep.is_wirehouse = 0
+            THEN 0.1613  -- TIER_0A_PRIME_MOVER_DUE: 16.13%
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.firm_rep_count <= 10
+                 AND ep.is_wirehouse = 0
+            THEN 0.1200  -- TIER_0B_SMALL_FIRM_DUE: 12.00%
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.is_wirehouse = 0
+            THEN 0.1000  -- TIER_0C_CLOCKWORK_DUE: 10.00%
             -- T1B_PRIME: 13.64%
             WHEN has_series_65_only = 1
                  AND has_portable_custodian = 1
@@ -597,8 +635,37 @@ scored_prospects AS (
             ELSE 0.025
         END as expected_conversion_rate,
         
-        -- V3 TIER NARRATIVES
+        -- V3 TIER NARRATIVES (V3.4.0)
         CASE 
+            -- Career Clock Narratives (V3.4.0)
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.tenure_months BETWEEN 12 AND 48
+                 AND ep.industry_tenure_months BETWEEN 60 AND 180
+                 AND ep.firm_net_change_12mo != 0
+                 AND ep.is_wirehouse = 0
+            THEN CONCAT(
+                first_name, ' is a PRIME MOVER DUE: Career Clock pattern shows they are in their move window. ',
+                'At ', firm_name, ' for ', CAST(tenure_months AS STRING), ' months (', 
+                CAST(ROUND(SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) * 100, 0) AS STRING), 
+                '% through typical cycle). TIER_0A: 16.13% expected conversion.'
+            )
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.firm_rep_count <= 10
+                 AND ep.is_wirehouse = 0
+            THEN CONCAT(
+                first_name, ' is at SMALL FIRM DUE: Career Clock pattern shows move window at small firm (', 
+                CAST(firm_rep_count AS STRING), ' reps). TIER_0B: 12.00% expected conversion.'
+            )
+            WHEN ccs.tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+                 AND ep.is_wirehouse = 0
+            THEN CONCAT(
+                first_name, ' is CLOCKWORK DUE: Predictable Career Clock pattern shows move window. ',
+                'TIER_0C: 10.00% expected conversion.'
+            )
+            -- Standard Tier Narratives
             WHEN (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years >= 5 AND firm_net_change_12mo < 0 AND has_cfp = 1 AND is_wirehouse = 0) THEN
                 CONCAT(first_name, ' is a CFP holder at ', firm_name, ', which has lost ', CAST(ABS(firm_net_change_12mo) AS STRING), 
                        ' advisors (net) in the past year. CFP designation indicates book ownership and client relationships. ',
@@ -691,9 +758,13 @@ tier_limited AS (
             WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 'STANDARD_HIGH_V4'
             ELSE df.score_tier 
         END as final_tier,
-        -- Final expected rate (updated based on optimization analysis)
+        -- Final expected rate (V3.4.0)
         CASE 
             WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN 0.035  -- High-V4 STANDARD: 3.5%
+            -- Career Clock Tiers (V3.4.0)
+            WHEN df.score_tier = 'TIER_0A_PRIME_MOVER_DUE' THEN 0.1613  -- 16.13%
+            WHEN df.score_tier = 'TIER_0B_SMALL_FIRM_DUE' THEN 0.1200  -- 12.00%
+            WHEN df.score_tier = 'TIER_0C_CLOCKWORK_DUE' THEN 0.1000  -- 10.00%
             WHEN df.score_tier = 'TIER_1B_PRIME_ZERO_FRICTION' THEN 0.1364  -- V3.3.3: 13.64% conversion
             WHEN df.score_tier = 'TIER_1A_PRIME_MOVER_CFP' THEN 0.1000      -- V3.3.3: 10.00% conversion
             WHEN df.score_tier = 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 0.0909  -- V3.3.3: 9.09% conversion
@@ -780,8 +851,13 @@ tier_limited AS (
     FROM diversity_filtered df
     -- Priority tiers always included; STANDARD only if high-V4 (for backfill)
     -- OPTION C: EXCLUDE TIER_4 and TIER_5 (they convert at/below baseline)
-    WHERE (df.score_tier != 'STANDARD' AND df.score_tier NOT IN ('TIER_4_EXPERIENCED_MOVER', 'TIER_5_HEAVY_BLEEDER'))
-       OR (df.score_tier = 'STANDARD' AND df.v4_percentile >= 80)
+    -- ============================================================
+    -- Large firms (>50 reps) excluded (0.60x baseline)
+    WHERE (
+        (df.score_tier != 'STANDARD' AND df.score_tier NOT IN ('TIER_4_EXPERIENCED_MOVER', 'TIER_5_HEAVY_BLEEDER'))
+        OR (df.score_tier = 'STANDARD' AND df.v4_percentile >= 80)
+    )
+    AND df.firm_rep_count <= 50                       -- Size limit
 ),
 
 -- ============================================================================
@@ -798,16 +874,21 @@ deduplicated_before_quotas AS (
         PARTITION BY tl.crd
         ORDER BY 
             CASE tl.final_tier
-                WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 1  -- V3.3.3: Highest priority
-                WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 2
-                WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 3  -- V3.3.3: Higher than T1B
-                WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 4
-                WHEN 'TIER_1G_GROWTH_STAGE' THEN 5  -- V3.3.3: New tier
-                WHEN 'TIER_1_PRIME_MOVER' THEN 6
-                WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 7
-                WHEN 'TIER_2_PROVEN_MOVER' THEN 8
-                WHEN 'TIER_3_MODERATE_BLEEDER' THEN 9
-                WHEN 'STANDARD_HIGH_V4' THEN 10
+                -- Career Clock (highest)
+                WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN 1
+                WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN 2
+                WHEN 'TIER_0C_CLOCKWORK_DUE' THEN 3
+                -- Zero Friction & Priority
+                WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 6  -- V3.3.3: Highest priority
+                WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 7
+                WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 8  -- V3.3.3: Higher than T1B
+                WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 9
+                WHEN 'TIER_1G_GROWTH_STAGE' THEN 10  -- V3.3.3: New tier
+                WHEN 'TIER_1_PRIME_MOVER' THEN 11
+                WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 12
+                WHEN 'TIER_2_PROVEN_MOVER' THEN 13
+                WHEN 'TIER_3_MODERATE_BLEEDER' THEN 14
+                WHEN 'STANDARD_HIGH_V4' THEN 15
             END,
             tl.source_priority,
             tl.has_linkedin DESC,
@@ -825,17 +906,22 @@ linkedin_prioritized AS (
         ROW_NUMBER() OVER (
             ORDER BY 
                 CASE final_tier
-                    WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 1  -- V3.3.3: Highest priority
-                    WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 2
-                    WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 3  -- V3.3.3: Higher than T1B
-                    WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 4
-                    WHEN 'TIER_1G_GROWTH_STAGE' THEN 5  -- V3.3.3: New tier
-                    WHEN 'TIER_1_PRIME_MOVER' THEN 6
-                    WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 7
-                    WHEN 'TIER_2_PROVEN_MOVER' THEN 8
-                    WHEN 'TIER_3_MODERATE_BLEEDER' THEN 9
+                    -- Career Clock (highest)
+                    WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN 1
+                    WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN 2
+                    WHEN 'TIER_0C_CLOCKWORK_DUE' THEN 3
+                    -- Zero Friction & Priority
+                    WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 6  -- V3.3.3: Highest priority
+                    WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 7
+                    WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 8  -- V3.3.3: Higher than T1B
+                    WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 9
+                    WHEN 'TIER_1G_GROWTH_STAGE' THEN 10  -- V3.3.3: New tier
+                    WHEN 'TIER_1_PRIME_MOVER' THEN 11
+                    WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 12
+                    WHEN 'TIER_2_PROVEN_MOVER' THEN 13
+                    WHEN 'TIER_3_MODERATE_BLEEDER' THEN 14
                     -- OPTION C: TIER_4 and TIER_5 excluded
-                    WHEN 'STANDARD_HIGH_V4' THEN 10  -- Backfill only
+                    WHEN 'STANDARD_HIGH_V4' THEN 15  -- Backfill only
                 END,
                 source_priority,
                 has_linkedin DESC,
@@ -848,15 +934,20 @@ linkedin_prioritized AS (
                     PARTITION BY CASE WHEN has_linkedin = 0 THEN 1 ELSE 0 END
                     ORDER BY 
                         CASE final_tier
-                            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 1  -- V3.3.3: Highest priority
-                            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 2
-                            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 3  -- V3.3.3: Higher than T1B
-                            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 4
-                            WHEN 'TIER_1G_GROWTH_STAGE' THEN 5  -- V3.3.3: New tier
-                            WHEN 'TIER_1_PRIME_MOVER' THEN 6
-                            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 7
-                            WHEN 'TIER_2_PROVEN_MOVER' THEN 8
-                            WHEN 'TIER_3_MODERATE_BLEEDER' THEN 9
+                            -- Career Clock (highest)
+                            WHEN 'TIER_0A_PRIME_MOVER_DUE' THEN 1
+                            WHEN 'TIER_0B_SMALL_FIRM_DUE' THEN 2
+                            WHEN 'TIER_0C_CLOCKWORK_DUE' THEN 3
+                            -- Zero Friction & Priority
+                            WHEN 'TIER_1B_PRIME_ZERO_FRICTION' THEN 6  -- V3.3.3: Highest priority
+                            WHEN 'TIER_1A_PRIME_MOVER_CFP' THEN 7
+                            WHEN 'TIER_1G_ENHANCED_SWEET_SPOT' THEN 8  -- V3.3.3: Higher than T1B
+                            WHEN 'TIER_1B_PRIME_MOVER_SERIES65' THEN 9
+                            WHEN 'TIER_1G_GROWTH_STAGE' THEN 10  -- V3.3.3: New tier
+                            WHEN 'TIER_1_PRIME_MOVER' THEN 11
+                            WHEN 'TIER_1F_HV_WEALTH_BLEEDER' THEN 12
+                            WHEN 'TIER_2_PROVEN_MOVER' THEN 13
+                            WHEN 'TIER_3_MODERATE_BLEEDER' THEN 14
                             -- OPTION C: TIER_4 and TIER_5 excluded
                         END,
                         source_priority,
@@ -885,6 +976,7 @@ linkedin_prioritized AS (
         -- Dynamic tier quotas: Scale proportionally to ensure we have enough leads
         -- Base quotas are for 12 SGAs (2400 leads), scale up/down based on actual SGA count
         -- NOTE: These quotas are applied AFTER deduplication, so we have unique leads
+        -- ============================================================
         (final_tier = 'TIER_1A_PRIME_MOVER_CFP' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))
         OR (final_tier = 'TIER_1B_PRIME_ZERO_FRICTION' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))  -- V3.3.3: T1B_PRIME quota
         OR (final_tier = 'TIER_1G_ENHANCED_SWEET_SPOT' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))  -- V3.3.3: T1G_ENHANCED quota

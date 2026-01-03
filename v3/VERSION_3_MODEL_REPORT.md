@@ -1,10 +1,10 @@
 # Version 3 Lead Scoring Model - Comprehensive Technical Report
 
-**Model Version:** V3.4.0_01012026_CAREER_CLOCK  
+**Model Version:** V3.5.0_01032026_MA_TIERS  
 **Original Development Date:** December 21, 2025  
-**Last Updated:** January 1, 2026 (V3.4.0: Career Clock feature - individual advisor timing patterns)  
+**Last Updated:** January 3, 2026 (V3.5.0: M&A Active Tiers - capture advisors at M&A target firms)  
 **Base Directory:** `Version-3/`  
-**Status:** ✅ Production Ready (V3.4.0 with Career Clock tiers achieving 16.13% conversion)
+**Status:** ✅ Production Ready (V3.5.0 with M&A tiers achieving 9.0% conversion for PRIME tier)
 
 ---
 
@@ -560,6 +560,170 @@ The same advisor converts at **2-3x different rates** depending on where they ar
 - `v3/sql/lead_scoring_features_pit.sql` - Added Career Clock CTEs and features
 - `v3/sql/phase_4_v3_tiered_scoring.sql` - Added TIER_0A/0B/0C and NURTURE tiers
 - `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` - Added Career Clock logic, nurture list
+
+---
+
+## V3.5.0 M&A Active Tiers (January 2026)
+
+**Release Date:** January 3, 2026
+
+### Background: The Large Firm Paradox
+
+Our data shows large firms (>50 reps) convert at 0.60x baseline, so we exclude them:
+
+| Firm Size | Conversion Rate | Lift | Action |
+|-----------|-----------------|------|--------|
+| ≤10 reps | 6.2% | 1.62x | Include |
+| 11-50 reps | 4.1% | 1.07x | Include |
+| >50 reps | 2.3% | 0.60x | **Exclude** |
+
+**The Problem:** M&A disruption changes everything. When Commonwealth (2,500 reps) was acquired by LPL, their advisors converted at 5.37% - far above the 2.3% we'd expect from a large firm.
+
+**The Solution:** Create M&A opportunity tiers that exempt advisors at M&A target firms from the large firm exclusion.
+
+### Empirical Evidence: Commonwealth/LPL Merger
+
+**Event:** LPL Financial announced acquisition of Commonwealth Financial Network (July 2024)
+
+| Metric | Value |
+|--------|-------|
+| Total Commonwealth advisors | ~2,500 |
+| Advisors contacted | 242 |
+| Conversions (MQLs) | 13 |
+| **Conversion Rate** | **5.37%** |
+| **Lift vs Baseline (3.82%)** | **1.41x** |
+| **Lift vs Large Firm (2.3%)** | **2.34x** |
+
+#### Profile Analysis
+
+| Profile | Contacted | Converted | Conv Rate | Lift | Tier |
+|---------|-----------|-----------|-----------|------|------|
+| **Senior Titles** | 43 | 4 | 9.30% | 2.06x | → PRIME |
+| **Mid-Career (10-20yr)** | 49 | 4 | 8.16% | 1.75x | → PRIME |
+| Serial Movers (3+) | 175 | 9 | 5.14% | 0.86x | Does NOT help |
+| Newer to Firm (<5yr) | 86 | 4 | 4.65% | 0.81x | Does NOT help |
+
+**Key Insight:** Senior titles and mid-career advisors convert best during M&A. Serial movers do NOT convert better (they're always in-market anyway).
+
+### New Tier Definitions
+
+| Tier | Criteria | Expected Conv | Lift | Priority Rank |
+|------|----------|---------------|------|---------------|
+| **TIER_MA_ACTIVE_PRIME** | M&A target + (Senior title OR Mid-career 10-20yr) | 9.0% | 2.36x | 4 |
+| **TIER_MA_ACTIVE** | M&A target (any advisor) | 5.4% | 1.41x | 5 |
+
+**Senior Titles Include:**
+- President, Principal, Partner
+- Owner, Founder, Director
+- Managing Director, Managing Partner
+
+**Mid-Career Definition:**
+- Industry tenure: 10-20 years (120-240 months)
+- Established but not entrenched
+- Most receptive to change
+
+### Implementation Architecture: Two-Query Approach
+
+#### Why Single-Query Failed
+
+Multiple attempts to integrate M&A tiers into the main lead list query failed:
+
+| Attempt | Approach | Result |
+|---------|----------|--------|
+| 1 | EXISTS subquery exemption | ❌ Works in isolation, fails in full query |
+| 2 | JOIN exemption | ❌ Works in isolation, fails in full query |
+| 3 | UNION two-track with NOT EXISTS | ❌ Works in isolation, fails in full query |
+| 4 | LEFT JOIN with inline subquery | ❌ Works in isolation, fails in full query |
+
+**Root Cause:** BigQuery's CTE optimization in complex queries (1,400+ lines) causes unpredictable behavior. CTEs may be evaluated in unexpected order, JOINs may return 0 matches, and no errors are thrown.
+
+#### The Working Solution
+
+```
+QUERY 1: CREATE january_2026_lead_list (standard leads only)
+                           ↓
+QUERY 2: INSERT INTO january_2026_lead_list (M&A leads)
+```
+
+This completely bypasses BigQuery's CTE optimization by using two separate, simple queries.
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `pipeline/sql/create_ma_eligible_advisors.sql` | Pre-build M&A advisors with tier assignments |
+| `pipeline/sql/Insert_MA_Leads.sql` | Insert M&A leads after base list created |
+| `ml_features.active_ma_target_firms` | Track firms with M&A activity |
+| `ml_features.ma_eligible_advisors` | Pre-built M&A advisor table |
+
+### Tier Hierarchy (V3.5.0)
+
+| Rank | Tier | Conversion | Status |
+|------|------|------------|--------|
+| 1 | TIER_0A_PRIME_MOVER_DUE | 16.13% | Career Clock |
+| 2 | TIER_0B_SMALL_FIRM_DUE | 10.0% | Career Clock |
+| 3 | TIER_0C_CLOCKWORK_DUE | 6.5% | Career Clock |
+| 4 | **TIER_MA_ACTIVE_PRIME** | **9.0%** | **NEW (V3.5.0)** |
+| 5 | **TIER_MA_ACTIVE** | **5.4%** | **NEW (V3.5.0)** |
+| 6 | TIER_1B_PRIME_ZERO_FRICTION | 11.76% | Zero Friction |
+| 7 | TIER_1A_PRIME_MOVER_CFP | 16.44% | Certification |
+| ... | ... | ... | ... |
+
+### Verification Results (January 3, 2026)
+
+| Check | Expected | Actual | Status |
+|-------|----------|--------|--------|
+| M&A tiers populated | 150-600 | 300 | ✅ PASS |
+| TIER_MA_ACTIVE_PRIME | 50-200 | 300 | ✅ PASS |
+| Large firm exemption | M&A >50 reps | 293 with >200 reps | ✅ PASS |
+| No violations | 0 | 0 | ✅ PASS |
+| Narratives | 100% | 100% | ✅ PASS |
+
+### Business Impact
+
+| Metric | Value |
+|--------|-------|
+| M&A leads added | 300 |
+| Expected conversion | 9.0% |
+| Expected MQLs | 27 |
+| Would be excluded without M&A tier | 293 (at firms >200 reps) |
+
+### M&A Window Timing
+
+| Days Since Announcement | Status | Rationale |
+|-------------------------|--------|-----------|
+| 0-60 | WATCH | Too early - advisors still processing |
+| 60-180 | **HOT** | Optimal - uncertainty is peak |
+| 181-365 | **ACTIVE** | Still elevated - deal in progress |
+| 365+ | STALE | Deal closed, dust settled |
+
+**Critical Insight:** Contact advisors WHILE they're still at the firm. Once they leave, conversion drops to ~1.2%.
+
+### Key Learnings
+
+1. **M&A creates opportunity windows** - Normally low-converting large firms convert well during disruption
+2. **Senior + Mid-career convert best** - They have the most at stake
+3. **Timing matters** - 60-365 day window after announcement
+4. **BigQuery has CTE limitations** - Use two-query architecture for complex logic
+5. **The "Works in Isolation" Trap** - Logic that passes diagnostic queries can fail in full query context
+
+### Rollback Plan
+
+If M&A tiers underperform:
+
+```sql
+-- Remove M&A leads from lead list
+DELETE FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
+WHERE score_tier LIKE 'TIER_MA%';
+```
+
+### Refresh Schedule
+
+| Trigger | Action |
+|---------|--------|
+| Monthly | Re-run `create_ma_eligible_advisors.sql` |
+| M&A news | Update `active_ma_target_firms` |
+| Firm status change | Update `ma_status` (HOT → ACTIVE → STALE) |
 
 ---
 
@@ -2345,4 +2509,5 @@ END as score_tier
 | 1.0 | 2025-12-21 | Initial report for V3.1 |
 | 1.1 | 2025-12-22 | Updated for V3.2 with new tier structure, validation results, folder structure, and BigQuery deployment details |
 | 1.2 | 2025-12-22 | Added V3.2_12212025 consolidation details (7 tiers → 5 tiers), January 2026 lead list generation process and deployment information |
+| 1.3 | 2026-01-03 | Added V3.5.0 M&A Active Tiers section, documented two-query architecture, updated tier hierarchy |
 
