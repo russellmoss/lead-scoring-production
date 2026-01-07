@@ -1,11 +1,18 @@
 {
-  "model_id": "lead-scoring-v3.5.0",
-  "model_version": "V3.5.0_01022026_MA_TIERS",
+  "model_id": "lead-scoring-v3.5.1",
+  "model_version": "V3.5.1_01072026_AGE_EXCLUSION",
   "model_type": "rules-based-tiers",
   "status": "production",
   "created_date": "2025-12-21",
-  "updated_date": "2026-01-02",
-  "previous_version": "V3.4.0_01012026_CAREER_CLOCK",
+  "updated_date": "2026-01-07",
+  "previous_version": "V3.5.0_01022026_MA_TIERS",
+  "changes_from_v3.5.0": [
+    "UPDATED: Age exclusion threshold changed from 65+ to 70+",
+    "RATIONALE: Age 65-69 converts at 2.97% (below baseline but still converts)",
+    "RATIONALE: Age 70+ converts at 1.48% (0.41x baseline - strong exclusion signal)",
+    "IMPACT: +50 conversions/month by including 65-69 age group",
+    "ANALYSIS: age_analysis_results.md (January 7, 2026)"
+  ],
   "changes_from_v3.4": [
     "Added TIER_MA_ACTIVE_PRIME tier for senior/mid-career at M&A targets (9.0% conversion, 2.36x lift)",
     "Added TIER_MA_ACTIVE tier for all advisors at M&A targets (5.4% conversion, 1.41x lift)",

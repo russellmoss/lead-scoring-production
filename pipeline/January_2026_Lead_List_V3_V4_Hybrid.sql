@@ -27,8 +27,9 @@
 -- - Ritholtz Wealth Management (CRD 168652) - Partner firm
 --
 -- ADVISOR EXCLUSIONS:
--- - Age over 65: Excludes AGE_RANGE values '65-69', '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
+-- - Age over 70: Excludes AGE_RANGE values '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
 --   (Applied in base_prospects CTE alongside wirehouse and title exclusions)
+--   NOTE: Age 65-69 is now INCLUDED (converts at 2.97%, below baseline but still converts)
 --
 -- OUTPUT: ml_features.january_2026_lead_list (NEW SINGLE TABLE - replaces old tables)
 -- ============================================================================
@@ -227,10 +228,12 @@ base_prospects AS (
       -- Exclude matched patterns and CRDs
       AND ef.firm_pattern IS NULL
       AND ec.firm_crd IS NULL
-      -- Age exclusion: Exclude advisors over 65
-      -- AGE_RANGE values over 65: '65-69', '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
+      -- Age exclusion: Exclude advisors over 70
+      -- AGE_RANGE values over 70: '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
+      -- NOTE: Age 65-69 is now INCLUDED (converts at 2.97%, below baseline but still converts)
+      -- Based on age_analysis_results.md analysis (January 7, 2026)
       AND (c.AGE_RANGE IS NULL 
-           OR c.AGE_RANGE NOT IN ('65-69', '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'))
+           OR c.AGE_RANGE NOT IN ('70-74', '75-79', '80-84', '85-89', '90-94', '95-99'))
       -- Title exclusions
       AND NOT (
           UPPER(c.TITLE_NAME) LIKE '%FINANCIAL SOLUTIONS ADVISOR%'

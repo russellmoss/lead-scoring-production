@@ -1,10 +1,10 @@
 # Version 3 Lead Scoring Model - Comprehensive Technical Report
 
-**Model Version:** V3.5.0_01032026_MA_TIERS  
+**Model Version:** V3.5.1_01072026_AGE_EXCLUSION  
 **Original Development Date:** December 21, 2025  
-**Last Updated:** January 3, 2026 (V3.5.0: M&A Active Tiers - capture advisors at M&A target firms)  
+**Last Updated:** January 7, 2026 (V3.5.1: Age exclusion threshold updated from 65+ to 70+)  
 **Base Directory:** `Version-3/`  
-**Status:** ✅ Production Ready (V3.5.0 with M&A tiers achieving 9.0% conversion for PRIME tier)
+**Status:** ✅ Production Ready (V3.5.1 with optimized age exclusion threshold)
 
 ---
 
@@ -724,6 +724,32 @@ WHERE score_tier LIKE 'TIER_MA%';
 | Monthly | Re-run `create_ma_eligible_advisors.sql` |
 | M&A news | Update `active_ma_target_firms` |
 | Firm status change | Update `ma_status` (HOT → ACTIVE → STALE) |
+
+---
+
+## Age Exclusion Analysis (January 2026)
+
+**Release Date:** January 7, 2026
+
+### Background
+Previously excluding all advisors 65+ based on assumption of lower conversion.
+
+### Analysis Results (age_analysis_results.md)
+
+| Age Group | Conversion Rate | Lift vs Baseline | Decision |
+|-----------|-----------------|------------------|----------|
+| Under 50 | 3.88% | 1.07x | ✅ Include |
+| 50-64 | 3.22% | 0.89x | ✅ Include |
+| 65-69 | 2.97% | 0.82x | ✅ **Now Included** |
+| 70+ | 1.48% | 0.41x | ❌ Exclude |
+
+### Change Made
+- **Before:** Exclude AGE_RANGE IN ('65-69', '70-74', '75-79', '80-84', '85-89', '90-94', '95-99')
+- **After:** Exclude AGE_RANGE IN ('70-74', '75-79', '80-84', '85-89', '90-94', '95-99')
+
+### Impact
+- **+50 conversions/month** from 65-69 age group (1,683 contacts × 2.97%)
+- Age 70+ still converts significantly below baseline (1.48%) - exclusion validated
 
 ---
 
@@ -2510,4 +2536,5 @@ END as score_tier
 | 1.1 | 2025-12-22 | Updated for V3.2 with new tier structure, validation results, folder structure, and BigQuery deployment details |
 | 1.2 | 2025-12-22 | Added V3.2_12212025 consolidation details (7 tiers → 5 tiers), January 2026 lead list generation process and deployment information |
 | 1.3 | 2026-01-03 | Added V3.5.0 M&A Active Tiers section, documented two-query architecture, updated tier hierarchy |
+| 1.4 | 2026-01-07 | Added V3.5.1 Age Exclusion Analysis section, updated exclusion threshold from 65+ to 70+ |
 
