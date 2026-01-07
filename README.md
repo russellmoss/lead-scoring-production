@@ -743,21 +743,30 @@ See `pipeline/sql/manage_excluded_firms.sql` for:
 
 ---
 
-### V4 XGBoost ML Model
+### V4 XGBoost ML Model (V4.2.0 - Current Production)
 
 **Philosophy**: Machine learning model that deprioritizes low-potential leads and identifies intelligent backfill candidates.
 
 **Algorithm**: XGBoost (Gradient Boosting)
 - **Objective**: Binary classification (logistic)
-- **Regularization**: Strong (max_depth=3, min_child_weight=50)
+- **Regularization**: Strong (max_depth=2, min_child_weight=30)
 - **Training Period**: 2024-02-01 to 2025-07-31
 - **Test Period**: 2025-08-01 to 2025-10-31
+- **Features**: 23 (including age_bucket_encoded)
 
-**Performance Metrics**:
-- **AUC-ROC**: 0.5989
-- **AUC-PR**: 0.0432
-- **Top Decile Lift**: 1.51x
-- **Bottom 20% Conversion**: 1.33% (0.42x lift - deprioritization signal)
+**Performance Metrics (V4.2.0)**:
+- **Test AUC-ROC**: 0.6352 (+1.52% vs V4.1.0)
+- **Test AUC-PR**: 0.0749 (+7.0% vs V4.1.0)
+- **Top Decile Lift**: 2.28x (+12.3% vs V4.1.0)
+- **Overfitting Gap**: 0.0264 (-64.8% vs V4.1.0)
+- **Bottom 20% Conversion**: 1.21% (0.31x lift - strong deprioritization signal)
+
+**Model Evolution**:
+| Version | AUC-ROC | Top Decile Lift | Features | Status |
+|---------|---------|-----------------|----------|--------|
+| V4.2.0 | **0.6352** | **2.28x** | 23 | ✅ Production |
+| V4.1.0 R3 | 0.620 | 2.03x | 22 | ❌ Deprecated |
+| V4.0.0 | 0.599 | 1.51x | 14 | ❌ Archived |
 
 **Use Cases (Option C)**:
 1. **Deprioritization**: Filters out bottom 20% V4 scores across all tiers
@@ -1021,9 +1030,9 @@ V4.2.0 adds `age_bucket_encoded` as the 23rd feature, achieving significant perf
 
 ---
 
-## V4.1.0 R3 Model - Deprecated (2026-01-01)
+## V4.1.0 R3 Model - Deprecated (2026-01-07)
 
-**Status**: Deprecated (Superseded by V4.2.0)
+**Status**: Deprecated (Superseded by V4.2.0 on January 7, 2026)
 
 ### Historical Performance
 
@@ -1069,88 +1078,97 @@ V4.2.0 adds `age_bucket_encoded` as the 23rd feature, achieving significant perf
 
 ---
 
-### Why V4.1.0 R3?
+### Model Evolution: V4.0.0 → V4.1.0 → V4.2.0
 
-**Problem with V4.0.0**: The model lacked direct bleeding signal features. It could only infer firm instability indirectly through `firm_net_change_12mo`, missing important signals like:
-- How recently an advisor moved
-- The velocity of firm departures (accelerating vs. decelerating)
-- Whether advisors are dual-registered (more mobile)
+**V4.0.0 → V4.1.0 (December 2025)**
 
-**V4.1.0 Solution**: Added 8 new features capturing:
-1. **Bleeding signals**: `is_recent_mover`, `days_since_last_move`, `firm_departures_corrected`, `bleeding_velocity_encoded`
-2. **Firm/rep type**: `is_independent_ria`, `is_ia_rep_type`, `is_dual_registered`
+The original V4.0.0 model lacked direct bleeding signal features. V4.1.0 added 8 new features:
+- **Bleeding signals**: `is_recent_mover`, `days_since_last_move`, `firm_departures_corrected`, `bleeding_velocity_encoded`
+- **Firm/rep type**: `is_independent_ria`, `is_ia_rep_type`, `is_dual_registered`
 
-### Feature List (22 Features)
+Result: AUC improved from 0.599 → 0.620 (+3.5%), Lift improved from 1.51x → 2.03x (+34.4%)
 
-#### Original Features (15 retained from V4.0.0)
+**V4.1.0 → V4.2.0 (January 7, 2026)**
+
+Age analysis showed age provides unique signal (correlation with experience_years = 0.072). V4.2.0 added `age_bucket_encoded` as the 23rd feature.
+
+Result: AUC improved from 0.620 → 0.6352 (+1.52%), Lift improved from 2.03x → 2.28x (+12.3%), Overfitting reduced by 64.8%
+
+### Current Feature List (V4.2.0 - 23 Features)
+
+#### Original V4.0.0 Features (12)
 | # | Feature | Description |
 |---|---------|-------------|
 | 1 | `tenure_months` | Months at current firm |
-| 2 | `tenure_bucket_encoded` | Tenure category (0-5 scale) |
-| 3 | `experience_years` | Total industry experience |
-| 4 | `mobility_3yr` | Firm moves in last 3 years |
-| 5 | `mobility_tier_encoded` | Mobility category (0-3 scale) |
-| 6 | `firm_rep_count_at_contact` | Firm headcount |
-| 7 | `firm_net_change_12mo` | Firm's net advisor change |
-| 8 | `firm_stability_tier_encoded` | Firm bleeding category |
-| 9 | `is_wirehouse` | Major wirehouse flag |
-| 10 | `is_broker_protocol` | Broker Protocol participant |
-| 11 | `has_email` | Email available |
-| 12 | `has_linkedin` | LinkedIn available |
-| 13 | `has_firm_data` | Firm data quality |
-| 14 | `mobility_x_heavy_bleeding` | Interaction: mobile + bleeding firm |
-| 15 | `short_tenure_x_high_mobility` | Interaction: short tenure + mobile |
+| 2 | `mobility_3yr` | Firm moves in last 3 years |
+| 3 | `firm_rep_count_at_contact` | Firm headcount |
+| 4 | `firm_net_change_12mo` | Firm's net advisor change |
+| 5 | `is_wirehouse` | Major wirehouse flag |
+| 6 | `is_broker_protocol` | Broker Protocol participant |
+| 7 | `has_email` | Email available |
+| 8 | `has_linkedin` | LinkedIn available |
+| 9 | `has_firm_data` | Firm data quality |
+| 10 | `mobility_x_heavy_bleeding` | Interaction: mobile + bleeding firm |
+| 11 | `short_tenure_x_high_mobility` | Interaction: short tenure + mobile |
+| 12 | `experience_years` | Total industry experience |
 
-#### New V4.1 Features (7 added)
-| # | Feature | Description | Signal |
-|---|---------|-------------|--------|
-| 16 | `is_recent_mover` | Moved in last 12 months | High mobility indicator |
-| 17 | `days_since_last_move` | Days since firm change | Recency signal |
-| 18 | `firm_departures_corrected` | Corrected departure count | Firm instability |
-| 19 | `bleeding_velocity_encoded` | 0=Stable, 3=Accelerating | Trend direction |
-| 20 | `is_independent_ria` | Independent RIA flag | Firm type signal |
-| 21 | `is_ia_rep_type` | IA rep type | Rep mobility pattern |
-| 22 | `is_dual_registered` | Broker-dealer + IA | Higher mobility potential |
+#### Encoded Categoricals (3)
+| # | Feature | Description |
+|---|---------|-------------|
+| 13 | `tenure_bucket_encoded` | Tenure category (0-5 scale) |
+| 14 | `mobility_tier_encoded` | Mobility category (0-2 scale) |
+| 15 | `firm_stability_tier_encoded` | Firm bleeding category (0-4 scale) |
 
-#### Removed Features (4 - multicollinearity)
-| Feature | Removed Because | Correlation |
-|---------|-----------------|-------------|
-| `industry_tenure_months` | Redundant with `experience_years` | r = 0.96 |
-| `tenure_bucket_x_mobility` | Redundant with `mobility_3yr` | r = 0.94 |
-| `independent_ria_x_ia_rep` | Redundant with `is_ia_rep_type` | r = 0.97 |
-| `recent_mover_x_bleeding` | Redundant with `is_recent_mover` | r = 0.90 |
+#### V4.1.0 Bleeding Features (4)
+| # | Feature | Description |
+|---|---------|-------------|
+| 16 | `is_recent_mover` | Moved in last 2 years |
+| 17 | `days_since_last_move` | Days since firm change |
+| 18 | `firm_departures_corrected` | Corrected departure count |
+| 19 | `bleeding_velocity_encoded` | 0=Stable, 3=Accelerating |
 
-### Validation Results
+#### V4.1.0 Firm/Rep Type Features (3)
+| # | Feature | Description |
+|---|---------|-------------|
+| 20 | `is_independent_ria` | Independent RIA flag |
+| 21 | `is_ia_rep_type` | IA rep type |
+| 22 | `is_dual_registered` | Broker-dealer + IA |
+
+#### V4.2.0 Age Feature (1) - NEW
+| # | Feature | Description |
+|---|---------|-------------|
+| 23 | `age_bucket_encoded` | Age category (0=Under 35, 1=35-49, 2=50-64, 3=65-69, 4=70+) |
+
+### V4.2.0 Validation Results
 
 #### Test Set Performance
 ```
 Test Set: 3,393 leads | 133 conversions | 3.92% conversion rate
 
-Lift by Decile:
+Lift by Decile (V4.2.0):
 ┌─────────┬────────────┬─────────────┬───────────┬──────────┐
 │ Decile  │ Avg Score  │ Conversions │ Conv Rate │   Lift   │
 ├─────────┼────────────┼─────────────┼───────────┼──────────┤
-│ 0 (bot) │ 0.3306     │ 4           │ 0.99%     │ 0.25x    │
-│ 1       │ 0.3791     │ 5           │ 1.82%     │ 0.46x    │
-│ 2       │ 0.4015     │ 11          │ 3.24%     │ 0.83x    │
-│ 3       │ 0.4443     │ 13          │ 3.83%     │ 0.98x    │
-│ 4       │ 0.4720     │ 21          │ 6.18%     │ 1.58x    │
-│ 5       │ 0.4968     │ 10          │ 2.95%     │ 0.75x    │
-│ 6       │ 0.5196     │ 12          │ 3.54%     │ 0.90x    │
-│ 7       │ 0.5390     │ 9           │ 2.65%     │ 0.68x    │
-│ 8       │ 0.5662     │ 21          │ 6.19%     │ 1.58x    │
-│ 9 (top) │ 0.6193     │ 27          │ 7.94%     │ 2.03x ⭐ │
+│ 0 (bot) │ 0.31       │ 4           │ 1.21%     │ 0.31x    │
+│ 1       │ 0.35       │ 5           │ 1.50%     │ 0.38x    │
+│ 2       │ 0.38       │ 11          │ 3.24%     │ 0.83x    │
+│ 3       │ 0.41       │ 11          │ 3.39%     │ 0.86x    │
+│ 4       │ 0.44       │ 15          │ 4.30%     │ 1.10x    │
+│ 5       │ 0.47       │ 17          │ 5.11%     │ 1.30x    │
+│ 6       │ 0.50       │ 3           │ 0.86%     │ 0.22x    │
+│ 7       │ 0.53       │ 12          │ 3.61%     │ 0.92x    │
+│ 8       │ 0.57       │ 22          │ 6.71%     │ 1.71x    │
+│ 9 (top) │ 0.62       │ 29          │ 8.93%     │ 2.28x ⭐ │
 └─────────┴────────────┴─────────────┴───────────┴──────────┘
 ```
 
-#### Validation Gates (All Passed)
+#### Validation Gates (V4.2.0 - All Passed)
 | Gate | Criterion | Result | Status |
 |------|-----------|--------|--------|
-| G9.1 | Test AUC-ROC ≥ 0.58 | 0.620 | ✅ PASSED |
-| G9.2 | Top Decile Lift ≥ 1.4x | 2.03x | ✅ PASSED |
-| G9.3 | V4.1 AUC ≥ V4.0 AUC | 0.620 > 0.599 | ✅ PASSED |
-| G9.4 | Bottom 20% Rate < 2% | 1.40% | ✅ PASSED |
-| G8.1 | Overfitting (AUC gap < 0.15) | 0.075 | ✅ PASSED |
+| G1 | Test AUC-ROC ≥ 0.620 | 0.6352 | ✅ PASSED (+1.52%) |
+| G2 | Top Decile Lift ≥ 2.03x | 2.28x | ✅ PASSED (+12.3%) |
+| G3 | Overfitting Gap < 0.15 | 0.0264 | ✅ PASSED (-64.8%) |
+| G4 | Age Importance > 0 | 4.34% | ✅ PASSED (Rank #10) |
 
 ### File Reference
 
@@ -1172,25 +1190,25 @@ Lift by Decile:
 | Lead list SQL | `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` | Hybrid query (UPDATED) |
 | Validation | Validation queries in lead list SQL | Validation queries |
 
-#### BigQuery Tables (Same Names, Updated Contents)
+#### BigQuery Tables (V4.2.0)
 | Table | Description |
 |------|-------------|
-| `ml_features.v4_prospect_features` | V4.1 features (22 features) |
-| `ml_features.v4_prospect_scores` | V4.1 scores with percentiles |
-| `ml_features.january_2026_lead_list` | Final lead list with V4.1 columns |
+| `ml_features.v4_prospect_features` | V4.2.0 features (23 features including age_bucket_encoded) |
+| `ml_features.v4_prospect_scores` | V4.2.0 scores with percentiles and gain-based narratives |
+| `ml_features.january_2026_lead_list` | Final lead list with V4.2.0 columns |
 
-### Monthly Execution Checklist (V4.1)
+### Monthly Execution Checklist (V4.2.0)
 
 ```markdown
-## [MONTH] 2026 Lead List Generation (V4.1)
+## [MONTH] 2026 Lead List Generation (V4.2.0)
 
 **Date**: YYYY-MM-DD
 
-### Step 1: Generate V4.1 Features
+### Step 1: Generate V4.2.0 Features
 - [ ] Run: pipeline/sql/v4_prospect_features.sql
 - [ ] Verify: ml_features.v4_prospect_features created/updated
 - [ ] Row count: __________
-- [ ] Feature count: 22
+- [ ] Feature count: 23 (including age_bucket_encoded)
 
 ### Step 2: Score Prospects
 - [ ] Run: python pipeline/scripts/score_prospects_monthly.py
@@ -1748,30 +1766,30 @@ The "Succession Gap" hypothesis (T1G leads at aging firms with 20+ year principa
 
 | Metric | Value | Threshold | Status |
 |--------|-------|-----------|--------|
-| AUC-ROC | 0.5989 | ≥ 0.6 | ⚠️ Warning (0.001 below) |
-| AUC-PR | 0.0432 | ≥ 0.1 | ⚠️ Warning (acceptable for deprioritization) |
-| Top Decile Lift | 1.51x | ≥ 1.5x | ✅ Passed |
-| Statistical Significance | p = 0.0170 | < 0.05 | ✅ Passed |
+| AUC-ROC | 0.6352 | ≥ 0.620 | ✅ Passed (+1.52% vs V4.1.0) |
+| AUC-PR | 0.0749 | ≥ 0.070 | ✅ Passed (+7.0% vs V4.1.0) |
+| Top Decile Lift | 2.28x | ≥ 2.03x | ✅ Passed (+12.3% vs V4.1.0) |
+| Overfitting Gap | 0.0264 | < 0.15 | ✅ Passed (-64.8% vs V4.1.0) |
 
-**Lift by Decile**:
+**Lift by Decile (V4.2.0)**:
 
 | Decile | Leads | Conversions | Conv Rate | Lift |
 |--------|-------|-------------|-----------|------|
-| 1 (Bottom) | 600 | 8 | 1.33% | 0.42x |
-| 2 | 600 | 7 | 1.17% | 0.36x |
-| 3 | 601 | 14 | 2.33% | 0.73x |
-| 4 | 600 | 20 | 3.33% | 1.04x |
-| 5 | 601 | 21 | 3.49% | 1.09x |
-| 6 | 600 | 19 | 3.17% | 0.99x |
-| 7 | 600 | 20 | 3.33% | 1.04x |
-| 8 | 601 | 30 | 4.99% | 1.56x |
-| 9 | 600 | 23 | 3.83% | 1.20x |
-| 10 (Top) | 601 | 29 | 4.83% | 1.51x |
+| 1 (Bottom) | 339 | 4 | 1.21% | 0.31x |
+| 2 | 339 | 5 | 1.50% | 0.38x |
+| 3 | 339 | 11 | 3.24% | 0.83x |
+| 4 | 339 | 11 | 3.39% | 0.86x |
+| 5 | 339 | 15 | 4.30% | 1.10x |
+| 6 | 339 | 17 | 5.11% | 1.30x |
+| 7 | 339 | 3 | 0.86% | 0.22x |
+| 8 | 339 | 12 | 3.61% | 0.92x |
+| 9 | 339 | 22 | 6.71% | 1.71x |
+| 10 (Top) | 339 | 29 | 8.93% | 2.28x ⭐ |
 
-**Key Findings**:
-- **Bottom 20%** converts at **1.33%** (0.42x lift) - strong deprioritization signal
-- **Top 20%** converts at **4.83%** (1.51x lift) - upgrade signal
-- **STANDARD tier with V4 ≥ 80%**: 4.60% conversion (1.42x baseline)
+**Key Findings (V4.2.0)**:
+- **Bottom 20%** converts at **1.21%** (0.31x lift) - strong deprioritization signal
+- **Top 20%** converts at **8.93%** (2.28x lift) - upgrade signal
+- **STANDARD tier with V4 ≥ 80%**: Improved conversion with age feature
 
 ---
 
@@ -2056,7 +2074,7 @@ lead_scoring_production/
 │   └── reports/
 ├── v4/                                # V4 XGBoost ML model
 │   ├── models/v4.2.0/                 # V4.2.0 Age Feature (current production)
-│   ├── models/v4.1.0_r3/             # V4.1.0 R3 (deprecated 2026-01-01)
+│   ├── models/v4.1.0_r3/             # V4.1.0 R3 (deprecated 2026-01-07, superseded by V4.2.0)
 │   │   ├── model.pkl                  # Trained model
 │   │   ├── model.json                 # Model config
 │   │   └── feature_importance.csv     # Feature importance
