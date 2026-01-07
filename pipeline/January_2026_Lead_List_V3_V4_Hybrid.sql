@@ -26,6 +26,10 @@
 -- - Savvy Advisors, Inc. (CRD 318493) - Internal firm
 -- - Ritholtz Wealth Management (CRD 168652) - Partner firm
 --
+-- ADVISOR EXCLUSIONS:
+-- - Age over 65: Excludes AGE_RANGE values '65-69', '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
+--   (Applied in base_prospects CTE alongside wirehouse and title exclusions)
+--
 -- OUTPUT: ml_features.january_2026_lead_list (NEW SINGLE TABLE - replaces old tables)
 -- ============================================================================
 
@@ -223,6 +227,10 @@ base_prospects AS (
       -- Exclude matched patterns and CRDs
       AND ef.firm_pattern IS NULL
       AND ec.firm_crd IS NULL
+      -- Age exclusion: Exclude advisors over 65
+      -- AGE_RANGE values over 65: '65-69', '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
+      AND (c.AGE_RANGE IS NULL 
+           OR c.AGE_RANGE NOT IN ('65-69', '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'))
       -- Title exclusions
       AND NOT (
           UPPER(c.TITLE_NAME) LIKE '%FINANCIAL SOLUTIONS ADVISOR%'
