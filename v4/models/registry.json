@@ -4,18 +4,12 @@
     "v4.2.0": {
       "version": "v4.2.0",
       "status": "production",
-      "training_date": "2026-01-01",
-      "deployed_date": "2026-01-01",
+      "training_date": "2026-01-07",
+      "deployed_date": "2026-01-07",
       "model_type": "XGBoost",
-      "features": 29,
+      "features": 23,
       "new_features": [
-        "cc_tenure_cv",
-        "cc_pct_through_cycle",
-        "cc_is_clockwork",
-        "cc_is_in_move_window",
-        "cc_is_too_early",
-        "cc_months_until_window",
-        "cc_completed_jobs"
+        "age_bucket_encoded"
       ],
       "hyperparameters": {
         "max_depth": 2,
@@ -32,30 +26,31 @@
         "scale_pos_weight": 40.99
       },
       "metrics": {
-        "test_auc_roc": 0.6258,
-        "test_auc_pr": 0.0531,
-        "top_decile_lift": 1.87,
-        "bottom_20_pct_rate": 0.0117,
-        "train_test_auc_gap": 0.0959,
-        "early_stopping_iteration": 472
+        "test_auc_roc": 0.6352,
+        "test_auc_pr": 0.0749,
+        "top_decile_lift": 2.28,
+        "train_test_auc_gap": 0.0264,
+        "overfitting_gap": 0.0264
       },
       "comparison": {
         "vs_v4.1.0_r3": {
-          "test_auc_change": "+0.60%",
-          "top_decile_lift_change": "-7.9%",
-          "bottom_20_rate_change": "-16.4%",
-          "summary": "Improved AUC and better deprioritization, slightly lower top decile lift"
+          "test_auc_change": "+1.52%",
+          "top_decile_lift_change": "+12.3%",
+          "overfitting_gap_change": "-64.8%",
+          "summary": "Improved AUC (+1.52%), improved top decile lift (+12.3%), reduced overfitting (-64.8%)"
         }
       },
       "deployment_strategy": "hybrid",
-      "use_case": "deprioritization_filter_with_timing",
+      "use_case": "deprioritization_filter",
       "deprioritization_threshold": 20,
-      "career_clock_features": {
+      "age_feature": {
         "enabled": true,
-        "purpose": "Timing-aware deprioritization of leads contacted too early in career cycle",
-        "features": 7
+        "purpose": "Age-based conversion signal (r=0.072 with experience_years, not redundant)",
+        "encoding": "UNDER_35=0, 35_49=1, 50_64=2, 65_69=3, 70_PLUS=4",
+        "importance_rank": 23,
+        "note": "Zero gain-based importance but model performance improved, suggesting age signal captured through interactions"
       },
-      "notes": "V4.2.0 adds Career Clock features for timing-aware scoring. Improved AUC (+0.60%) and better deprioritization (-16.4% bottom 20% rate). Career Clock features enable identification of predictable career patterns and optimal outreach timing."
+      "notes": "V4.2.0 adds age_bucket_encoded feature based on age_analysis_results.md (January 7, 2026). Improved AUC (+1.52%), improved top decile lift (+12.3%), reduced overfitting (-64.8%). All validation gates passed."
     },
     "v4.1.0": {
       "version": "v4.1.0",

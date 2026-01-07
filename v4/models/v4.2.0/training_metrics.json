@@ -1,20 +1,58 @@
 {
-  "version": "v4.2.0",
-  "created": "2026-01-01T12:44:08.500134",
-  "metrics": {
-    "train_auc": 0.7217052042326338,
-    "test_auc": 0.6258042806549666,
-    "test_aucpr": 0.053140775121837486,
-    "auc_gap": 0.09590092357766722,
-    "top_decile_lift": 1.8731229166666667,
-    "bottom_20_rate": 0.011656952539550375,
-    "best_iteration": 472
+  "model_version": "v4.2.0",
+  "trained_at": "2026-01-07T14:20:04.729934",
+  "features": [
+    "tenure_months",
+    "mobility_3yr",
+    "firm_rep_count_at_contact",
+    "firm_net_change_12mo",
+    "is_wirehouse",
+    "is_broker_protocol",
+    "has_email",
+    "has_linkedin",
+    "has_firm_data",
+    "mobility_x_heavy_bleeding",
+    "short_tenure_x_high_mobility",
+    "experience_years",
+    "tenure_bucket_encoded",
+    "mobility_tier_encoded",
+    "firm_stability_tier_encoded",
+    "is_recent_mover",
+    "days_since_last_move",
+    "firm_departures_corrected",
+    "bleeding_velocity_encoded",
+    "is_independent_ria",
+    "is_ia_rep_type",
+    "is_dual_registered",
+    "age_bucket_encoded"
+  ],
+  "feature_count": 23,
+  "train_auc_roc": 0.6616,
+  "test_auc_roc": 0.6352,
+  "test_auc_pr": 0.0749,
+  "overfitting_gap": 0.0264,
+  "baseline_comparison": {
+    "v41_test_auc": 0.62,
+    "v42_test_auc": 0.6352,
+    "improvement": 1.52
   },
-  "comparison_to_v41": {
-    "test_auc_change": 0.0060042806549666095,
-    "top_decile_lift_change": -0.15687708333333306,
-    "bottom_20_rate_change": -0.0023430474604496255
-  },
-  "scale_pos_weight": 40.99320882852292,
-  "feature_count": 29
+  "gates_passed": true,
+  "gate_results": {
+    "G1_AUC": {
+      "criterion": "Test AUC >= 0.62",
+      "actual": 0.6352299460307209,
+      "passed": "True",
+      "improvement": "+1.52%"
+    },
+    "G3_OVERFIT": {
+      "criterion": "Overfitting gap < 0.15",
+      "actual": 0.02635152218567538,
+      "passed": "True"
+    },
+    "G2_LIFT": {
+      "criterion": "Top Decile Lift >= 2.03x",
+      "actual": 2.2777926960257786,
+      "passed": "True"
+    }
+  }
 }

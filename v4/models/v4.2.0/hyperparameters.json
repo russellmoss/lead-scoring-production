@@ -1,28 +1,17 @@
 {
-  "version": "v4.2.0",
-  "created": "2026-01-01",
-  "base_version": "v4.1.0_r3",
-  "changes_from_base": "Added Career Clock features, increased colsample_bytree from 0.6 to 0.7 for more features",
-  "hyperparameters": {
-    "objective": "binary:logistic",
-    "eval_metric": ["auc", "aucpr", "logloss"],
-    "max_depth": 2,
-    "min_child_weight": 30,
-    "reg_alpha": 1.0,
-    "reg_lambda": 5.0,
-    "gamma": 0.3,
-    "learning_rate": 0.01,
-    "n_estimators": 2000,
-    "early_stopping_rounds": 150,
-    "subsample": 0.6,
-    "colsample_bytree": 0.7,
-    "base_score": 0.5,
-    "scale_pos_weight": "dynamic",
-    "random_state": 42
-  },
-  "notes": [
-    "Increased colsample_bytree from 0.6 to 0.7 due to more features (22 → 29)",
-    "All other parameters unchanged from V4.1.0 R3",
-    "If overfitting detected, reduce max_depth to 1 or increase reg_lambda"
-  ]
+  "max_depth": 2,
+  "min_child_weight": 30,
+  "reg_alpha": 1.0,
+  "reg_lambda": 5.0,
+  "gamma": 0.3,
+  "learning_rate": 0.01,
+  "n_estimators": 2000,
+  "early_stopping_rounds": 150,
+  "subsample": 0.6,
+  "colsample_bytree": 0.6,
+  "base_score": 0.5,
+  "scale_pos_weight": 41.0,
+  "objective": "binary:logistic",
+  "eval_metric": "auc",
+  "random_state": 42
 }

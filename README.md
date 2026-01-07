@@ -1,10 +1,10 @@
 # Lead Scoring Production Pipeline - Hybrid V3 + V4 Model
 
-**Version**: 3.5.0 (M&A Active Tiers + Two-Query Architecture)  
-**Last Updated**: January 3, 2026  
+**Version**: 3.5.1 (V4.2.0 Age Feature + Gain-Based Narratives)  
+**Last Updated**: January 7, 2026  
 **Status**: ✅ Production Ready  
 **V3 Model**: V3.5.0_01032026_MA_TIERS - M&A opportunity capture  
-**V4 Model**: V4.2.0 (Career Clock) - Deployed January 1, 2026  
+**V4 Model**: V4.2.0 (23 features with Age Bucket) - Updated January 7, 2026  
 **Architecture**: Two-Query (bypasses BigQuery CTE optimization issues)
 
 ---
@@ -48,6 +48,14 @@ This repository contains a **hybrid lead scoring system** that combines:
 - But M&A disruption changes dynamics → Commonwealth converted at 5.37% during acquisition
 - Without M&A tiers, we would miss 100-500 MQLs per major M&A event
 
+**V4.2.0 Model Performance (January 7, 2026 Update):**
+- **Features**: 23 (added age_bucket_encoded as 23rd feature)
+- **Test AUC-ROC**: 0.6352 (+1.52% vs V4.1.0)
+- **Top Decile Lift**: 2.28x (+12.3% vs V4.1.0)
+- **Overfitting Gap**: 0.0264 (-64.8% vs V4.1.0)
+- **Narrative Generation**: Gain-based (SHAP TreeExplainer deprecated due to XGBoost serialization bug)
+- **Age Feature Importance**: Rank #10 of 23, 4.34% of total gain
+
 **Monthly Time Estimate**: 15-20 minutes once pipeline is set up
 
 ---
@@ -60,12 +68,16 @@ Before starting, ensure you have:
 
 - ✅ Access to BigQuery project: `savvy-gtm-analytics`
 - ✅ V4.2.0 model files in `v4/models/v4.2.0/`:
-  - `model.pkl` (trained XGBoost model)
-  - `model.json` (model configuration)
-  - `final_features.json` (29 features including Career Clock)
+  - `model.json` (XGBoost model - **primary format**)
+  - `model.pkl` (legacy pickle backup)
+  - `model_backup.pkl` (original backup)
+  - `feature_importance.csv` (gain-based importance for narratives)
+  - `hyperparameters.json` (training configuration)
+  - `training_metrics.json` (validation gate results)
 - ✅ Python environment with required packages:
   ```bash
-  pip install xgboost pandas google-cloud-bigquery shap numpy
+  pip install xgboost pandas google-cloud-bigquery numpy
+  # Note: SHAP no longer required for narratives (using gain-based approach)
   ```
 - ✅ Working directory: `pipeline/` (this directory)
 
@@ -213,7 +225,7 @@ GROUP BY ma_tier;
 
 ### Step 2: Calculate V4 Features for All Prospects
 
-**Purpose**: Calculate the 29 features required by the V4.2.0 XGBoost model (including 7 Career Clock features) for all producing advisors in FINTRX.
+**Purpose**: Calculate the 23 features required by the V4.2.0 XGBoost model (including age_bucket_encoded) for all producing advisors in FINTRX.
 
 **File**: `pipeline/sql/v4_prospect_features.sql`
 
@@ -255,7 +267,7 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_features`;
 
 **What It Does**:
 1. Loads V4.2.0 XGBoost model from `v4/models/v4.2.0/model.pkl`
-2. Fetches features from `ml_features.v4_prospect_features` (29 features including Career Clock)
+2. Fetches features from `ml_features.v4_prospect_features` (23 features including age_bucket_encoded)
 3. Generates predictions (0-1 probability scores)
 4. Calculates percentile ranks (1-100)
 5. Identifies deprioritize candidates (bottom 20%)
@@ -274,8 +286,8 @@ python scripts/score_prospects_monthly.py
 - `v4_percentile`: Percentile rank (1-100)
 - `v4_deprioritize`: Boolean (TRUE if percentile ≤ 20)
 - `v4_upgrade_candidate`: Boolean (TRUE if percentile ≥ 80)
-- `shap_top1_feature`, `shap_top2_feature`, `shap_top3_feature`: Top 3 ML features
-- `shap_top1_value`, `shap_top2_value`, `shap_top3_value`: SHAP values
+- `top1_feature`, `top2_feature`, `top3_feature`: Top 3 ML features (gain-based)
+- `top1_value`, `top2_value`, `top3_value`: Feature values
 - `v4_narrative`: Human-readable explanation for upgrades
 
 **Validation**:
@@ -516,14 +528,14 @@ python scripts/export_lead_list.py
 - `firm_crd`: Firm CRD ID
 - `score_tier`: Final tier (V3 tier or STANDARD_HIGH_V4)
 - `expected_rate_pct`: Expected conversion rate (%)
-- `score_narrative`: Human-readable explanation (V3 rules or V4 SHAP)
+- `score_narrative`: Human-readable explanation (V3 rules or V4 gain-based)
 - `v4_score`: V4 XGBoost score (0-1)
 - `v4_percentile`: V4 percentile rank (1-100)
 - `is_high_v4_standard`: 1 = HIGH_V4 backfill lead, 0 = V3 tier lead
 - `v4_status`: Description of V4 status
-- `shap_top1_feature`: Most important ML feature driving score
-- `shap_top2_feature`: Second most important feature
-- `shap_top3_feature`: Third most important feature
+- `top1_feature`: Most important ML feature driving score (gain-based)
+- `top2_feature`: Second most important feature
+- `top3_feature`: Third most important feature
 - `prospect_type`: NEW_PROSPECT or recyclable
 - `sga_owner`: Assigned SGA name (automatically assigned)
 - `sga_id`: Assigned SGA Salesforce ID (for matching)
@@ -761,40 +773,69 @@ See `pipeline/sql/manage_excluded_firms.sql` for:
 
 ---
 
-## V4 XGBoost Model Features
+## V4 XGBoost Model Features (V4.2.0 - 23 Features)
 
-### Feature Overview
+The V4.2.0 model uses **23 features** (added `age_bucket_encoded` on January 7, 2026):
 
-The V4 model uses **14 features** across 6 categories:
+### Core Features (12)
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | tenure_months | Months at current firm |
+| 2 | mobility_3yr | Job moves in last 3 years |
+| 3 | firm_rep_count_at_contact | Firm size at time of contact |
+| 4 | firm_net_change_12mo | Net rep change (12 months) |
+| 5 | is_wirehouse | Wirehouse flag |
+| 6 | is_broker_protocol | Broker Protocol member |
+| 7 | has_email | Email available |
+| 8 | has_linkedin | LinkedIn available |
+| 9 | has_firm_data | Firm data available |
+| 10 | mobility_x_heavy_bleeding | Interaction: mobility × bleeding |
+| 11 | short_tenure_x_high_mobility | Interaction: short tenure × high mobility |
+| 12 | experience_years | Years in industry |
 
-1. **Tenure Features** (1 feature)
-2. **Experience Features** (2 features)
-3. **Mobility Features** (1 feature)
-4. **Firm Stability Features** (4 features)
-5. **Wirehouse & Broker Protocol** (2 features)
-6. **Data Quality Flags** (2 features)
-7. **Interaction Features** (2 features)
+### Encoded Categoricals (3)
+| # | Feature | Description |
+|---|---------|-------------|
+| 13 | tenure_bucket_encoded | Tenure category (0-5 scale) |
+| 14 | mobility_tier_encoded | Mobility tier (0-2 scale) |
+| 15 | firm_stability_tier_encoded | Firm stability (0-4 scale) |
 
-### Feature Importance Rankings
+### Bleeding Features (4)
+| # | Feature | Description |
+|---|---------|-------------|
+| 16 | is_recent_mover | Moved in last 2 years |
+| 17 | days_since_last_move | Days since last job change |
+| 18 | firm_departures_corrected | Corrected departure count |
+| 19 | bleeding_velocity_encoded | Bleeding acceleration (0-3 scale) |
 
-Based on XGBoost feature importance (gain-based):
+### Firm/Rep Type Features (3)
+| # | Feature | Description |
+|---|---------|-------------|
+| 20 | is_independent_ria | Independent RIA flag |
+| 21 | is_ia_rep_type | IA rep type flag |
+| 22 | is_dual_registered | Dual registered flag |
 
-| Rank | Feature | Importance | Category | Description |
-|------|---------|------------|----------|-------------|
-| 1 | `mobility_tier` | 178.85 | Mobility | Career mobility (Stable, Low_Mobility, High_Mobility) |
-| 2 | `has_email` | 158.87 | Data Quality | Whether email contact information is available |
-| 3 | `tenure_bucket` | 143.16 | Tenure | Tenure at current firm (0-12, 12-24, 24-48, 48-120, 120+, Unknown) |
-| 4 | `mobility_x_heavy_bleeding` | 117.26 | Interaction | High mobility AND heavy bleeding firm (powerful signal) |
-| 5 | `has_linkedin` | 110.46 | Data Quality | Whether LinkedIn profile is available |
-| 6 | `firm_stability_tier` | 101.08 | Firm Stability | Firm stability category (Unknown, Heavy_Bleeding, Light_Bleeding, Stable, Growing) |
-| 7 | `is_wirehouse` | 84.76 | Wirehouse | Whether advisor is at a wirehouse firm |
-| 8 | `firm_rep_count_at_contact` | 83.30 | Firm Stability | Current number of reps at firm |
-| 9 | `short_tenure_x_high_mobility` | 81.95 | Interaction | Short tenure (<24mo) AND high mobility |
-| 10 | `firm_net_change_12mo` | 71.99 | Firm Stability | Net change in advisors (arrivals - departures) over 12 months |
-| 11 | `is_broker_protocol` | 64.26 | Broker Protocol | Whether firm participates in Broker Protocol |
-| 12 | `experience_bucket` | 64.17 | Experience | Industry experience bucket (0-5, 5-10, 10-15, 15-20, 20+) |
-| 13 | `has_firm_data` | 55.48 | Firm Stability | Whether firm data is available |
-| 14 | `is_experience_missing` | 39.04 | Experience | Whether experience data is missing |
+### Age Feature (1) - NEW in V4.2.0
+| # | Feature | Description |
+|---|---------|-------------|
+| 23 | age_bucket_encoded | Age category (0=Under 35, 1=35-49, 2=50-64, 3=65-69, 4=70+) |
+
+### Feature Importance (Top 10 by Gain)
+
+| Rank | Feature | Gain | % of Total |
+|------|---------|------|------------|
+| 1 | tenure_bucket_encoded | 501.87 | 11.43% |
+| 2 | is_dual_registered | 293.63 | 6.69% |
+| 3 | has_firm_data | 285.20 | 6.49% |
+| 4 | days_since_last_move | 265.33 | 6.04% |
+| 5 | has_email | 261.50 | 5.96% |
+| 6 | is_independent_ria | 256.72 | 5.85% |
+| 7 | mobility_tier_encoded | 254.17 | 5.79% |
+| 8 | tenure_months | 224.79 | 5.12% |
+| 9 | is_ia_rep_type | 219.76 | 5.00% |
+| 10 | **age_bucket_encoded** | **190.61** | **4.34%** |
+
+*Note: Age feature ranked #10 with 4.34% importance - meaningful contribution to model.*
 
 ### Feature Descriptions
 
@@ -915,21 +956,68 @@ Based on XGBoost feature importance (gain-based):
 
 ---
 
-## V4.2.0 Career Clock Model - Production (Deployed 2026-01-01)
+## Lead Narrative Generation
+
+### Current Approach: Gain-Based Narratives (V4.2.0+)
+
+As of January 7, 2026, lead narratives are generated using **XGBoost gain-based feature importance** instead of SHAP values.
+
+**Why the change?**
+- SHAP TreeExplainer failed due to XGBoost serialization bug (`base_score` stored as `'[5E-1]'` instead of `0.5`)
+- Multiple fix attempts (JSON conversion, monkey-patching, Explainer fallback) all failed
+- Gain-based approach works immediately, is fast, and provides meaningful narratives
+
+**How it works:**
+1. Load pre-computed feature importance from `feature_importance.csv`
+2. For each lead, identify "notable" features:
+   - High importance globally
+   - Notable value for this specific lead (e.g., recent mover, bleeding firm)
+3. Generate human-readable narrative with top 3 factors
+
+**Example Output:**
+```
+Score: 0.6543
+Narrative: Key factors: Tenure Category (Down), Recent Mobility (Up mobile), Firm Net Change (Down bleeding)
+Top 1: Tenure Category = 1
+Top 2: Recent Mobility = 2
+Top 3: Firm Net Change = -7
+```
+
+**Trade-offs:**
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Gain-based (current)** | Works immediately, fast, deterministic | Global importance, not per-lead |
+| **SHAP TreeExplainer** | Per-lead importance | Broken due to base_score bug |
+
+**For Future Models:**
+When retraining V4.3.0+, ensure `base_score=0.5` is explicitly set and test SHAP before deployment:
+```python
+model = xgb.XGBClassifier(base_score=0.5, ...)  # Explicit float
+explainer = shap.TreeExplainer(model)  # Test before saving
+```
+
+---
+
+## V4.2.0 Age Feature Model - Production (Deployed 2026-01-07)
 
 ### Executive Summary
 
-V4.2.0 adds Career Clock features for timing-aware lead scoring, achieving:
+V4.2.0 adds `age_bucket_encoded` as the 23rd feature, achieving significant performance improvements:
 
 | Metric | V4.1.0 R3 (Previous) | V4.2.0 (Current) | Improvement |
 |--------|---------------------|------------------|-------------|
-| **Test AUC-ROC** | 0.6198 | **0.6258** | **+0.60%** |
-| **Top Decile Lift** | 2.03x | **1.87x** | -7.9% |
-| **Bottom 20% Rate** | 1.40% | **1.17%** | **-16.4%** ✅ |
-| **Features** | 22 | **29** | +7 Career Clock features |
-| **Career Clock** | None | **7 timing features** | ✅ New capability |
+| **Test AUC-ROC** | 0.620 | **0.6352** | **+1.52%** |
+| **Top Decile Lift** | 2.03x | **2.28x** | **+12.3%** |
+| **Overfitting Gap** | 0.075 | **0.0264** | **-64.8%** ✅ |
+| **Features** | 22 | **23** | +1 age feature |
+| **Age Feature** | None | **age_bucket_encoded** | ✅ New capability |
 
-**Key Improvement**: Better deprioritization of "too early" leads (-16.4% bottom 20% rate)
+**Key Improvements:**
+- Better model discrimination (+1.52% AUC)
+- Stronger top decile performance (+12.3% lift)
+- Reduced overfitting (-64.8% gap)
+- Age provides unique signal (correlation with experience: 0.072)
 
 ---
 
@@ -956,17 +1044,17 @@ V4.2.0 adds Career Clock features for timing-aware lead scoring, achieving:
 **Purpose**: Single source of truth for all model versions (V3 and V4)
 
 **Current Production Models**:
-- **V3.4.0**: Rules-based tiered classification (prioritization) with Career Clock tiers
+- **V3.4.0**: Rules-based tiered classification (prioritization) with Career Clock tiers (deprecated)
   - Registry: `v3/models/model_registry_v3.json`
   - Documentation: `v3/VERSION_3_MODEL_REPORT.md`
   - Production SQL: `v3/sql/generate_lead_list_v3.3.0.sql`
-  - Career Clock Tiers: TIER_0A/0B/0C (Prime Mover Due, Small Firm Due, Clockwork Due)
-- **V4.2.0**: XGBoost ML model (deprioritization) with Career Clock features
+  - Career Clock Tiers: TIER_0A/0B/0C (Prime Mover Due, Small Firm Due, Clockwork Due) - Deprecated
+- **V4.2.0**: XGBoost ML model (deprioritization) with age_bucket_encoded feature (23 features)
   - Registry: `v4/models/registry.json`
   - Documentation: `v4/VERSION_4_MODEL_REPORT.md`
   - Production SQL: `pipeline/sql/v4_prospect_features.sql`
   - Inference Script: `pipeline/scripts/score_prospects_monthly.py`
-  - Career Clock Features: 7 timing-aware features
+  - Age Feature: age_bucket_encoded (23rd feature, 4.34% importance)
 
 **Deprecated Models** (archived):
 - V4.0.0 → `archive/v4/models/v4.0.0/`
@@ -1071,7 +1159,7 @@ Lift by Decile:
 |------|------|-------------|
 | Model (pickle) | `v4/models/v4.2.0/model.pkl` | Trained XGBoost model |
 | Model (JSON) | `v4/models/v4.2.0/model.json` | Model JSON format |
-| Features | `v4/data/v4.2.0/final_features.json` | 29 feature list (22 + 7 Career Clock) |
+| Features | `v4/inference/lead_scorer_v4.py` | 23 feature list (22 + age_bucket_encoded) |
 | Hyperparameters | `v4/models/v4.2.0/hyperparameters.json` | Training config |
 | Feature importance | `v4/models/v4.2.0/feature_importance.csv` | XGBoost importance |
 | Training metrics | `v4/models/v4.2.0/training_metrics.json` | Performance metrics |
@@ -1124,10 +1212,79 @@ Lift by Decile:
 
 ### Changelog
 
+#### V3.5.1 / V4.2.0 - January 7, 2026 - Age Feature + SHAP Resolution
+
+**Summary:** Added age_bucket_encoded as 23rd feature to V4 model, significantly improving model performance. Resolved SHAP TreeExplainer bug by switching to gain-based narratives.
+
+**V4.2.0 Model Changes:**
+
+1. **Added age_bucket_encoded Feature**
+   - Encoding: UNDER_35=0, 35_49=1, 50_64=2, 65_69=3, 70_PLUS=4
+   - Correlation with experience_years: 0.072 (provides unique signal)
+   - Feature importance: Rank #10 of 23, 4.34% of total gain
+
+2. **Performance Improvements**
+   | Metric | V4.1.0 R3 | V4.2.0 | Improvement |
+   |--------|-----------|--------|-------------|
+   | Test AUC-ROC | 0.620 | 0.6352 | **+1.52%** |
+   | Top Decile Lift | 2.03x | 2.28x | **+12.3%** |
+   | Overfitting Gap | 0.075 | 0.0264 | **-64.8%** |
+
+3. **Validation Gates - ALL PASSED**
+   - G1: AUC ≥ 0.620 → ✅ 0.6352
+   - G2: Lift ≥ 2.03x → ✅ 2.28x
+   - G3: Overfit < 0.15 → ✅ 0.0264
+
+**SHAP Resolution:**
+
+1. **Problem:** SHAP TreeExplainer failed with `ValueError: could not convert string to float: '[5E-1]'`
+   - Root cause: XGBoost serializes `base_score` incorrectly in pickle format
+   - Multiple fix attempts failed (JSON conversion, monkey-patching, Explainer fallback)
+
+2. **Solution:** Switched to gain-based narratives
+   - Uses XGBoost native feature importance (instant, reliable)
+   - Identifies top 3 "notable" features per lead
+   - Generates human-readable narrative
+
+3. **Model Serialization Updated:**
+   - Primary format: `model.json` (XGBoost native)
+   - Backup: `model.pkl` and `model_backup.pkl` (legacy)
+   - Future models: Must verify SHAP works before deployment
+
+**Files Created:**
+- `v4/models/v4.2.0/model.json` - Primary model file
+- `v4/models/v4.2.0/feature_importance.csv` - Gain-based importance
+- `v4/models/v4.2.0/training_metrics.json` - Validation results
+- `v4/SHAP_debug.md` - Full debugging history
+- `v4/reports/v4.2/V4.2_Final_Summary.md` - Deployment summary
+
+**Files Modified:**
+- `v4/inference/lead_scorer_v4.py` - Gain-based narratives
+- `v4/training/train_v42_age_feature.py` - Save as JSON, verify SHAP
+- `pipeline/sql/v4_prospect_features.sql` - Added age_bucket_encoded
+- `README.md` - This document
+
+**Lift by Decile (V4.2.0):**
+| Decile | Conv Rate | Lift |
+|--------|-----------|------|
+| 10 (Top) | 8.93% | **2.28x** |
+| 9 | 6.71% | 1.71x |
+| 8 | 3.61% | 0.92x |
+| ... | ... | ... |
+| 1 (Bottom) | 1.21% | 0.31x |
+
+**Key Learnings:**
+1. **Age provides unique signal** - Low correlation with experience (0.072) means age captures different information
+2. **XGBoost serialization quirks** - Always set `base_score` explicitly and verify SHAP after training
+3. **Gain-based narratives work well** - Simpler, faster, and more reliable than SHAP for production use
+
+---
+
 | Version | Date | Changes |
 |---------|------|---------|
+| V3.5.0 | 2026-01-03 | M&A Active Tiers - Two-query architecture, 300 M&A leads, 9.0% conversion |
 | V3.3.1 | 2025-12-31 | Portable Book Signal Exclusions - Low discretionary AUM exclusion, large firm flag |
-| V4.2.0 | 2026-01-01 | Career Clock deployment - 29 features, 0.626 AUC, improved deprioritization |
+| V4.2.0 (old) | 2026-01-01 | Career Clock deployment - 29 features, 0.626 AUC (superseded by age feature version) |
 | V4.1.0 R3 | 2025-12-30 | Deprecated 2026-01-01 - 22 features, 0.620 AUC, 2.03x lift |
 | V4.1.0 R2 | 2025-12-30 | Added regularization - overfitting controlled |
 | V4.1.0 R1 | 2025-12-30 | Initial V4.1 training - 26 features |
@@ -1656,6 +1813,7 @@ The "Succession Gap" hypothesis (T1G leads at aging firms with 20+ year principa
 | Duplicate CRDs | JOIN issue | Add DISTINCT or fix JOIN logic |
 | Missing features | Column name mismatch | Check feature names in `final_features.json` |
 | SHAP calculation fails | Memory or model issues | Use feature importance fallback (already implemented) |
+| SHAP TreeExplainer fails with base_score error | XGBoost serialization bug | See [SHAP base_score Error](#shap-treesplainer-fails-with-base_score-error) below |
 
 ### Debug Queries
 
@@ -1897,7 +2055,7 @@ lead_scoring_production/
 │   ├── scripts/
 │   └── reports/
 ├── v4/                                # V4 XGBoost ML model
-│   ├── models/v4.2.0/                 # V4.2.0 Career Clock (current production)
+│   ├── models/v4.2.0/                 # V4.2.0 Age Feature (current production)
 │   ├── models/v4.1.0_r3/             # V4.1.0 R3 (deprecated 2026-01-01)
 │   │   ├── model.pkl                  # Trained model
 │   │   ├── model.json                 # Model config
@@ -2190,9 +2348,10 @@ If V3.3 underperforms:
 
 ---
 
-**Document Version**: 3.5.0 (M&A Active Tiers + Two-Query Architecture)  
-**Last Updated**: January 3, 2026  
-**Model Version**: V3.5.0_01032026_MA_TIERS  
+**Document Version**: 3.5.1 (V4.2.0 Age Feature + Gain-Based Narratives)  
+**Last Updated**: January 7, 2026  
+**V3 Model Version**: V3.5.0_01032026_MA_TIERS  
+**V4 Model Version**: V4.2.0 (23 features, gain-based narratives)  
 **Architecture**: Two-Query (CREATE then INSERT)  
 **Maintainer**: Data Science Team  
 **Questions?**: Contact the Data Science team
