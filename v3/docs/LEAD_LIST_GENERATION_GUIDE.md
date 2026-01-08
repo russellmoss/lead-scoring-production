@@ -1,27 +1,35 @@
-# Lead List Generation Guide (V3.2.1)
+# Lead List Generation Guide (V3.6.0)
 
-**Last Updated:** January 2025  
-**Model Version:** V3.2.1_12212025 (with CFP and Series 65 certification tiers)
+**Last Updated:** January 8, 2026  
+**Model Version:** V3.6.0_01082026_CAREER_CLOCK_TIERS (with Career Clock timing-aware prioritization)
 
 ---
 
 ## Quick Start
 
-### Option 1: Use the Reusable Template (Recommended)
+### Option 1: Use Main Production Query (Recommended)
 
-1. **Open:** `sql/generate_lead_list_v3.2.1.sql`
+1. **Open:** `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql`
+2. **Update table name** in CREATE TABLE statement (e.g., `february_2026_lead_list`)
+3. **Execute in BigQuery**
+
+**Note:** This is the main production query that includes:
+- V3.6.0 Career Clock tiers (TIER_0A, TIER_0B, TIER_0C)
+- V4.2.0 XGBoost scoring (23 features with age_bucket_encoded)
+- Disclosure exclusions (V3.5.2)
+- Age exclusions (70+)
+- M&A tiers (added via separate INSERT query)
+
+### Option 2: Use Legacy Template (If Needed)
+
+1. **Open:** `sql/generate_lead_list_v3.3.0.sql`
 2. **Replace placeholders:**
    - `{TABLE_NAME}` → Your table name (e.g., `february_2026_lead_list`)
    - `{LEAD_LIMIT}` → Number of leads (default: `2400`)
    - `{RECYCLABLE_DAYS}` → Days threshold for re-engagement (default: `180`)
 3. **Execute in BigQuery**
 
-### Option 2: Use Existing Monthly Query
-
-If you have a monthly query (like `January_2026_Lead_List_Query_V3.2.sql`), you can:
-- Copy it and update the table name
-- Update the model version references if needed
-- Execute in BigQuery
+**Note:** Legacy template may not include latest V3.6.0 Career Clock tiers. Prefer Option 1.
 
 ---
 
@@ -38,11 +46,15 @@ If you have a monthly query (like `January_2026_Lead_List_Query_V3.2.sql`), you 
 - **Not in bad status** (excludes: Closed, Converted, Dead, Unqualified, etc.)
 - Only includes leads that can be re-engaged
 
-### 3. Tier Scoring (V3.2.1)
-- **Tier 1A:** CFP holders at bleeding firms (16.44% conversion)
-- **Tier 1B:** Series 65 only (pure RIA) meeting Tier 1 criteria (16.48% conversion)
-- **Tier 1:** Standard Prime Movers (13.21% conversion)
-- **Tier 2-5:** Other priority tiers
+### 3. Tier Scoring (V3.6.0)
+- **Tier 0A:** Prime Mover + Career Clock timing (5.59% conversion, 2.43x vs No_Pattern)
+- **Tier 0B:** Small Firm + Career Clock timing (5.50% conversion)
+- **Tier 0C:** Clockwork Due - any advisor in move window (5.07% conversion, 1.33x lift)
+- **Tier 1B_PRIME:** Zero Friction Bleeder (13.64% conversion, 3.57x lift)
+- **Tier 1A:** CFP holders at bleeding firms (10.00% conversion)
+- **Tier 1:** Standard Prime Movers (7.1% conversion)
+- **Tier 2-3:** Other priority tiers
+- **Nurture:** Too Early in cycle (3.72% - excluded from active list)
 - **Standard:** Baseline (3.82% conversion)
 
 ### 4. Firm Diversity Cap

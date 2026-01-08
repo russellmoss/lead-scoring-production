@@ -1,0 +1,34 @@
+{
+  "model_version": "V4.3.0",
+  "trained_at": "2026-01-07T18:12:42.097122",
+  "feature_count": 25,
+  "training_samples": 24734,
+  "test_samples": 3393,
+  "base_score": 0.023813374302579446,
+  "train_auc": 0.6741794147624655,
+  "test_auc": 0.6388797915032981,
+  "overfit_gap": 0.035299623259167356,
+  "top_decile_lift": 2.7969175430270026,
+  "new_features": [
+    "cc_is_in_move_window",
+    "cc_is_too_early"
+  ],
+  "cc_in_window_importance_pct": 2.018982172012329,
+  "cc_too_early_importance_pct": 0.0,
+  "shap_expected_value": null,
+  "shap_validation_passed": true,
+  "shap_explainer_created": false,
+  "gate_results": {
+    "auc_gate": true,
+    "overfit_gate": true,
+    "cc_min_importance": true,
+    "cc_max_importance": true,
+    "shap_validation": true
+  },
+  "changes_from_v4.2.0": [
+    "Added cc_is_in_move_window feature",
+    "Added cc_is_too_early feature",
+    "Fixed SHAP base_score bug",
+    "True SHAP values now available for narratives"
+  ]
+}

@@ -1,6 +1,9 @@
 """
-Lead List Generator Script (V3.2.1)
+Lead List Generator Script (V3.6.0)
 Automates generation of monthly lead lists from production model
+
+Note: Main production now uses pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql directly.
+This script is for legacy template usage only.
 """
 
 import sys
@@ -31,7 +34,8 @@ def generate_lead_list_sql(
     """
     
     # Read the template
-    template_path = BASE_DIR / "sql" / "generate_lead_list_v3.2.1.sql"
+    # Note: Legacy template - main production uses pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql
+    template_path = BASE_DIR / "sql" / "generate_lead_list_v3.3.0.sql"
     
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
@@ -112,7 +116,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Generate lead lists from V3.2.1 production model'
+        description='Generate lead lists from V3.6.0 production model (legacy template)'
     )
     parser.add_argument(
         'table_name',

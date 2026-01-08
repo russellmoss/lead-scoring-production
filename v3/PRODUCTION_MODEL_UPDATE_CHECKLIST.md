@@ -10,7 +10,7 @@ This document lists **all files that must be updated** when changing the product
 ### 1. Core Tier Scoring Logic
 **File:** `sql/phase_4_v3_tiered_scoring.sql`  
 **Purpose:** Main tier assignment logic - defines all tier criteria and conversion rates  
-**BigQuery Table:** `ml_features.lead_scores_v3`  
+**BigQuery Table:** `ml_features.lead_scores_v3_6` (V3.6.0)  
 **Impact:** ⚠️ **HIGHEST PRIORITY** - This is the source of truth for all tier assignments
 
 **What to Update:**
@@ -20,10 +20,11 @@ This document lists **all files that must be updated** when changing the product
 - Tier display names
 - Priority ranking logic
 - Certification detection logic (CFP, Series 65, etc.)
+- Career Clock tier logic (V3.6.0)
 
 **Dependencies:** 
 - Reads from: `ml_features.lead_scoring_features_pit`
-- Creates: `ml_features.lead_scores_v3`
+- Creates: `ml_features.lead_scores_v3_6` (V3.6.0)
 
 ---
 
@@ -39,15 +40,16 @@ This document lists **all files that must be updated** when changing the product
 - View structure (if output schema changes)
 
 **Dependencies:**
-- Reads from: `ml_features.lead_scores_v3`
+- Reads from: `ml_features.lead_scores_v3_6` (V3.6.0)
 - Creates: `ml_features.lead_scores_v3_current` (VIEW)
 
 ---
 
 ### 3. Lead List Generator Template
-**File:** `sql/generate_lead_list_v3.2.1.sql`  
+**File:** `sql/generate_lead_list_v3.3.0.sql` (or current template)  
 **Purpose:** Reusable template for generating monthly lead lists  
-**Impact:** ⚠️ **HIGH PRIORITY** - Used for all monthly lead list generation
+**Impact:** ⚠️ **HIGH PRIORITY** - Used for all monthly lead list generation  
+**Note:** Main lead list generation now uses `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` (V3.6.0 + V4.2.0)
 
 **What to Update:**
 - Tier references in tier quota sections
@@ -55,9 +57,10 @@ This document lists **all files that must be updated** when changing the product
 - Tier priority ranking
 - Tier display names
 
-**Dependencies:**
-- Reads from: `ml_features.lead_scores_v3` (or `lead_scores_v3_2_12212025` if using consolidated version)
-- Used by: `scripts/generate_lead_list.py`
+**Dependencies:** 
+- Reads from: `ml_features.lead_scores_v3_6` (V3.6.0 production table)
+- Used by: `scripts/generate_lead_list.py` (if using template)
+- **Note:** Main production uses `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` directly
 
 ---
 
@@ -93,7 +96,7 @@ This document lists **all files that must be updated** when changing the product
 - Tier display names
 
 **Dependencies:**
-- Reads from: `ml_features.lead_scores_v3` (or consolidated version)
+- Reads from: `ml_features.lead_scores_v3_6` (V3.6.0)
 
 ---
 
@@ -137,7 +140,8 @@ This document lists **all files that must be updated** when changing the product
 - Placeholder replacement logic (if new placeholders added)
 
 **Dependencies:**
-- Uses: `sql/generate_lead_list_v3.2.1.sql`
+- Uses: `sql/generate_lead_list_v3.3.0.sql` (or current template)
+- **Note:** Main production uses `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` directly
 
 ---
 
@@ -208,17 +212,20 @@ This document lists **all files that must be updated** when changing the product
 
 ### Step 2: Update Core Logic
 - [ ] Update `sql/phase_4_v3_tiered_scoring.sql` with new tier logic
+- [ ] Update `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` (main production query)
 - [ ] Test tier assignments with sample queries
 - [ ] Verify all tier criteria are correct
 
 ### Step 3: Update Dependent Views/Queries
 - [ ] Update `sql/phase_7_production_view.sql` (if needed)
-- [ ] Update `sql/generate_lead_list_v3.2.1.sql` (if tier structure changes)
-- [ ] Update `sql/phase_7_salesforce_sync_v3.2_12212025.sql` (if schema changes)
+- [ ] Update `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` (main production query)
+- [ ] Update `sql/generate_lead_list_v3.3.0.sql` (if tier structure changes - legacy template)
+- [ ] Update `sql/phase_7_salesforce_sync.sql` (if schema changes)
 - [ ] Update `sql/phase_7_sga_dashboard.sql` (if table references change)
 
 ### Step 4: Update Monthly Queries
-- [ ] Update `January_2026_Lead_List_Query_V3.2.sql` (if tier quotas/structure changes)
+- [ ] Update `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` (main production query - V3.6.0)
+- [ ] Update `pipeline/January_2026_Lead_List_V3_V4_Hybrid.sql` (duplicate - ensure consistency)
 - [ ] Update any other month-specific queries
 
 ### Step 5: Update Metadata
@@ -228,9 +235,10 @@ This document lists **all files that must be updated** when changing the product
 
 ### Step 6: Deploy to BigQuery
 - [ ] Execute `sql/phase_4_v3_tiered_scoring.sql` in BigQuery
-- [ ] Verify table created: `ml_features.lead_scores_v3`
+- [ ] Verify table created: `ml_features.lead_scores_v3_6` (V3.6.0)
 - [ ] Execute `sql/phase_7_production_view.sql` in BigQuery (if view needs update)
 - [ ] Verify view created: `ml_features.lead_scores_v3_current`
+- [ ] Execute `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` for monthly lead list
 
 ### Step 7: Validate
 - [ ] Run validation queries to check tier distributions
@@ -251,12 +259,12 @@ lead_scoring_features_pit.sql
     ↓
 phase_4_v3_tiered_scoring.sql  ← ⭐ MAIN TIER LOGIC
     ↓
-    ├──→ lead_scores_v3 (BigQuery Table)
+    ├──→ lead_scores_v3_6 (BigQuery Table - V3.6.0)
     │       ↓
     │       ├──→ phase_7_production_view.sql → lead_scores_v3_current (View)
-    │       ├──→ generate_lead_list_v3.2.1.sql → Monthly Lead Lists
-    │       ├──→ January_2026_Lead_List_Query_V3.2.sql → Specific Month Lists
-    │       ├──→ phase_7_salesforce_sync_v3.2_12212025.sql → Salesforce Export
+    │       ├──→ generate_lead_list_v3.3.0.sql → Monthly Lead Lists (legacy template)
+    │       ├──→ pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql → Main Production Lists (V3.6.0 + V4.2.0)
+    │       ├──→ phase_7_salesforce_sync.sql → Salesforce Export
     │       └──→ phase_7_sga_dashboard.sql → Dashboard View
     │
     └──→ model_registry_v3.json (Metadata)
@@ -321,16 +329,16 @@ phase_4_v3_tiered_scoring.sql  ← ⭐ MAIN TIER LOGIC
 | File | Priority | When to Update |
 |------|----------|----------------|
 | `sql/phase_4_v3_tiered_scoring.sql` | 🔴 CRITICAL | Always - main tier logic |
+| `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` | 🔴 CRITICAL | Always - main production query (V3.6.0 + V4.2.0) |
 | `sql/phase_7_production_view.sql` | 🔴 CRITICAL | If view structure changes |
-| `sql/generate_lead_list_v3.2.1.sql` | 🔴 CRITICAL | If tier structure changes |
 | `models/model_registry_v3.json` | 🔴 CRITICAL | Always - version tracking |
-| `January_2026_Lead_List_Query_V3.2.sql` | 🟡 IMPORTANT | If tier quotas change |
-| `sql/phase_7_salesforce_sync_v3.2_12212025.sql` | 🟡 IMPORTANT | If schema changes |
+| `sql/generate_lead_list_v3.3.0.sql` | 🟡 IMPORTANT | If tier structure changes (legacy template) |
+| `sql/phase_7_salesforce_sync.sql` | 🟡 IMPORTANT | If schema changes |
 | `sql/phase_7_sga_dashboard.sql` | 🟡 IMPORTANT | If table references change |
 | `sql/lead_scoring_features_pit.sql` | 🟢 OPTIONAL | Only if features change |
 
 ---
 
-*Last Updated: January 2026*  
-*Model Version: V3.2.1*
+*Last Updated: January 8, 2026*  
+*Model Version: V3.6.0_01082026_CAREER_CLOCK_TIERS*
 

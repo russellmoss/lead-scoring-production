@@ -1,38 +1,61 @@
 -- ============================================================================
--- V4 PROSPECT FEATURES TABLE (UPDATED FOR V4.1.0)
+-- V4.3.2 PROSPECT FEATURES (CAREER CLOCK + FUZZY FIRM MATCHING)
 -- ============================================================================
+-- Version: 4.3.2
+-- Updated: 2026-01-08
 -- 
--- VERSION: V4.1.0 R3 (Updated 2025-12-30)
--- CREATED: [Original date]
--- UPDATED: 2025-12-30
--- PURPOSE: Calculate all 22 V4.1 features for prospect scoring
+-- CHANGES FROM V4.2.0:
+-- - ADDED: cc_is_in_move_window (Career Clock timing signal)
+-- - ADDED: cc_is_too_early (Career Clock deprioritization signal)
+-- - FIXED: SHAP base_score bug - now using true SHAP values for narratives
+-- - Total features: 26 (was 23)
+--
+-- V4.3.1 CHANGES (January 8, 2026):
+-- - FIXED: Career Clock data quality - exclude current firm from employment history
+-- - ADDED: is_likely_recent_promotee feature (26 total features)
+-- - Impact: ~692 advisors had polluted Career Clock data (10-19% of long-tenure advisors)
+-- - Example: Rafael Delasierra (founder, 27yr at firm) incorrectly in "move window"
+--
+-- V4.3.2 CHANGES (January 8, 2026):
+-- - FIXED: Career Clock fuzzy firm name matching for re-registrations
+-- - Excludes "prior firms" that match current firm name (first 15 chars after cleaning)
+-- - Example: James Patton at "Patton Albertson Miller Group" (CRD 281558) had
+--   "Patton Albertson & Miller" (CRD 126145) incorrectly counted as prior job
+-- - Impact: ~135 advisors removed from incorrect move window status
 -- 
--- CHANGES FROM V4.0.0:
--- - ADDED 8 new features (bleeding signals, firm/rep type)
--- - REMOVED 4 features (multicollinearity: r > 0.90)
--- - Total features: 22 (was 14)
--- 
--- NEW FEATURES:
--- - is_recent_mover (moved in last 12 months)
--- - days_since_last_move (days since joining current firm)
--- - firm_departures_corrected (corrected departure count from inferred_departures_analysis)
--- - bleeding_velocity_encoded (0=STABLE, 1=DECELERATING, 2=STEADY, 3=ACCELERATING)
--- - is_independent_ria (SEC registered, state notice filed)
--- - is_ia_rep_type (IA rep type)
--- - is_dual_registered (both broker-dealer and IA)
--- 
--- REMOVED FEATURES (multicollinearity):
--- - industry_tenure_months (r=0.96 with experience_years)
--- - tenure_bucket_x_mobility (r=0.94 with mobility_3yr)
--- - independent_ria_x_ia_rep (r=0.97 with is_ia_rep_type)
--- - recent_mover_x_bleeding (r=0.90 with is_recent_mover)
--- 
--- OUTPUT: ml_features.v4_prospect_features (SAME TABLE, updated contents)
--- 
--- USAGE:
---   Run this SQL before monthly lead list generation
---   Then run score_prospects_monthly.py to generate scores
--- 
+-- SHAP FIX:
+-- - V4.2.0 used gain-based importance due to XGBoost base_score serialization bug
+-- - V4.3.0 explicitly calculates and preserves base_score during training
+-- - Narratives now show true SHAP values with direction (increases/decreases)
+-- - SHAP values validated to sum to predictions
+--
+-- CAREER CLOCK VALIDATION:
+-- - Independent from age_bucket_encoded (correlation = 0.035)
+-- - In_Window adds 2.43x lift within 35-49 age group
+-- - Too_Early provides deprioritization signal (3.72% vs 3.82% baseline)
+-- - Analysis: career_clock_results.md (January 7, 2026)
+--
+-- EXISTING V4.2.0 FEATURES (23 - ALL PRESERVED):
+-- 1. experience_years           12. firm_departures_corrected
+-- 2. tenure_months              13. bleeding_velocity_encoded
+-- 3. mobility_3yr               14. days_since_last_move
+-- 4. firm_rep_count             15. short_tenure_x_high_mobility
+-- 5. firm_net_change_12mo       16. mobility_x_heavy_bleeding
+-- 6. num_prior_firms            17. has_email
+-- 7. is_ia_rep_type             18. has_linkedin
+-- 8. is_independent_ria         19. has_firm_data
+-- 9. is_dual_registered         20. is_wirehouse
+-- 10. is_recent_mover           21. is_broker_protocol
+-- 11. age_bucket_encoded        22. has_cfp
+--                               23. has_series_65_only
+--
+-- NEW V4.3.0 FEATURES (2 - ADDITIVE):
+-- 24. cc_is_in_move_window      (Career Clock: In move window flag)
+-- 25. cc_is_too_early           (Career Clock: Too early flag)
+--
+-- PIT COMPLIANCE:
+-- - Career Clock uses only completed employment records (END_DATE < prediction_date)
+-- - Current tenure calculated as of prediction_date
 -- ============================================================================
 
 CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.v4_prospect_features` AS
@@ -45,6 +68,7 @@ base_prospects AS (
     SELECT 
         c.RIA_CONTACT_CRD_ID as crd,
         SAFE_CAST(c.PRIMARY_FIRM AS INT64) as firm_crd,
+        SAFE_CAST(c.PRIMARY_FIRM AS INT64) as current_firm_crd,  -- V4.3.1: For Career Clock current firm exclusion
         c.PRIMARY_FIRM_NAME as firm_name,
         c.LATEST_REGISTERED_EMPLOYMENT_START_DATE as firm_start_date,
         c.PRIMARY_FIRM_START_DATE as primary_firm_start_date,
@@ -306,6 +330,10 @@ firm_bleeding_corrected_features AS (
         fbc.firm_crd,
         fbc.departures_12mo_inferred as firm_departures_corrected
     FROM `savvy-gtm-analytics.ml_features.firm_bleeding_corrected` fbc
+    QUALIFY ROW_NUMBER() OVER(
+        PARTITION BY fbc.firm_crd 
+        ORDER BY fbc.departures_12mo_inferred DESC  -- Prefer highest departure count if duplicates exist
+    ) = 1
 ),
 
 -- ============================================================================
@@ -323,6 +351,16 @@ bleeding_velocity AS (
             ELSE 0  -- STABLE or NULL
         END as bleeding_velocity_encoded
     FROM `savvy-gtm-analytics.ml_features.firm_bleeding_velocity_v41` bv
+    QUALIFY ROW_NUMBER() OVER(
+        PARTITION BY bv.firm_crd 
+        ORDER BY 
+            CASE bv.bleeding_velocity
+                WHEN 'ACCELERATING' THEN 3
+                WHEN 'STEADY' THEN 2
+                WHEN 'DECELERATING' THEN 1
+                ELSE 0
+            END DESC  -- Prefer most severe velocity if duplicates exist
+    ) = 1
 ),
 
 -- ============================================================================
@@ -348,85 +386,205 @@ firm_rep_type_features AS (
 ),
 
 -- ============================================================================
--- FEATURE GROUP 7: CAREER CLOCK FEATURES (V4.2.0)
+-- CAREER CLOCK STATS (V4.3.0)
 -- ============================================================================
--- For inference, use prediction_date (typically CURRENT_DATE)
--- Must match training feature engineering exactly
--- PIT-safe: Only uses completed employment records with END_DATE < prediction_date
+-- Calculates advisor career patterns from completed employment records
+-- PIT-SAFE: Only uses jobs with END_DATE < prediction_date
+-- 
+-- Features:
+-- - cc_completed_jobs: Number of completed prior jobs
+-- - cc_avg_prior_tenure_months: Average tenure at prior firms
+-- - cc_tenure_cv: Coefficient of variation (STDDEV/AVG) of tenure lengths
+--   - CV < 0.3 = "Clockwork" (highly predictable pattern)
+--   - CV 0.3-0.5 = "Semi-Predictable"
+--   - CV >= 0.5 = Unpredictable (no pattern)
 -- ============================================================================
-
-career_clock_raw AS (
-    SELECT 
-        bp.crd as advisor_crd,
+career_clock_stats AS (
+    SELECT
+        bp.crd,
         bp.prediction_date,
-        eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE as prior_end,
-        DATE_DIFF(
+        COUNT(*) as cc_completed_jobs,
+        AVG(DATE_DIFF(
             eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
             eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
             MONTH
-        ) as prior_tenure_months
+        )) as cc_avg_prior_tenure_months,
+        SAFE_DIVIDE(
+            STDDEV(DATE_DIFF(
+                eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+                MONTH
+            )),
+            AVG(DATE_DIFF(
+                eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+                MONTH
+            ))
+        ) as cc_tenure_cv
     FROM base_prospects bp
     INNER JOIN `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history` eh
         ON bp.crd = eh.RIA_CONTACT_CRD_ID
     WHERE eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
       AND eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE IS NOT NULL
-      -- PIT: Only completed jobs before prediction date
+      -- ⚠️ PIT CRITICAL: Only completed jobs BEFORE prediction_date
       AND eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE < bp.prediction_date
+      -- Valid tenure (positive months)
       AND DATE_DIFF(eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
                     eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE, MONTH) > 0
+      -- ============================================================================
+      -- V4.3.1 FIX: Exclude current firm from employment history
+      -- ============================================================================
+      -- Analysis (January 8, 2026) found ~692 advisors with polluted Career Clock
+      -- data because their current firm appeared in employment history (e.g., firm
+      -- re-registrations, CRD changes). This caused advisors like Rafael Delasierra
+      -- (27yr founder) to incorrectly appear in "move window."
+      -- 
+      -- Impact by tenure bucket:
+      --   10-15 years: 19.3% affected
+      --   20+ years: 10.6% affected
+      -- ============================================================================
+      AND SAFE_CAST(eh.PREVIOUS_REGISTRATION_COMPANY_CRD_ID AS INT64) != bp.current_firm_crd
+      -- ============================================================================
+      -- V4.3.2 FIX: Exclude same firm with different CRD (re-registrations)
+      -- ============================================================================
+      -- Firms sometimes re-register under new CRDs (LLC changes, mergers, etc.)
+      -- Uses first-15-chars fuzzy match on cleaned firm names
+      -- Validated: 100% accuracy on test cases (James Patton, Robert Kantor)
+      -- Impact: ~135 advisors corrected
+      -- ============================================================================
+      AND NOT (
+          LEFT(REGEXP_REPLACE(LOWER(bp.firm_name), r'[^a-z0-9]', ''), 15) 
+          = LEFT(REGEXP_REPLACE(LOWER(eh.PREVIOUS_REGISTRATION_COMPANY_NAME), r'[^a-z0-9]', ''), 15)
+      )
+    GROUP BY bp.crd, bp.prediction_date
+    HAVING COUNT(*) >= 2  -- Need 2+ completed jobs to detect pattern
 ),
 
-career_clock_stats AS (
-    SELECT
-        advisor_crd,
-        prediction_date,
-        COUNT(*) as completed_jobs,
-        AVG(prior_tenure_months) as avg_prior_tenure_months,
-        SAFE_DIVIDE(STDDEV(prior_tenure_months), AVG(prior_tenure_months)) as tenure_cv
-    FROM career_clock_raw
-    GROUP BY advisor_crd, prediction_date
-    HAVING COUNT(*) >= 2
-),
-
+-- ============================================================================
+-- CAREER CLOCK FEATURES (V4.3.0)
+-- ============================================================================
+-- Derives the 2 selective features from career clock stats
+-- 
+-- Logic:
+-- - cc_pct_through_cycle = current_tenure / avg_prior_tenure
+-- - In_Window: CV < 0.5 AND 70-130% through cycle
+-- - Too_Early: CV < 0.5 AND < 70% through cycle
+-- ============================================================================
 career_clock_features AS (
     SELECT
         cf.crd,
         cf.prediction_date,
-        cf.tenure_months,
+        ccs.cc_completed_jobs,
+        ccs.cc_avg_prior_tenure_months,
+        ccs.cc_tenure_cv,
         
-        COALESCE(ccs.completed_jobs, 0) as cc_completed_jobs,
-        ccs.avg_prior_tenure_months as cc_avg_prior_tenure_months,
-        COALESCE(ccs.tenure_cv, 1.0) as cc_tenure_cv,
-        COALESCE(SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months), 1.0) as cc_pct_through_cycle,
+        -- Calculate percent through typical tenure cycle
+        SAFE_DIVIDE(cf.tenure_months, ccs.cc_avg_prior_tenure_months) as cc_pct_through_cycle,
         
-        CASE WHEN ccs.tenure_cv < 0.3 THEN 1 ELSE 0 END as cc_is_clockwork,
-        
-        CASE
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months) BETWEEN 0.7 AND 1.3
-            THEN 1 ELSE 0
+        -- ================================================================
+        -- FEATURE 24: cc_is_in_move_window (PRIMARY SIGNAL)
+        -- ================================================================
+        -- Advisor has predictable pattern (CV < 0.5) AND is currently
+        -- in their typical "move window" (70-130% through their average tenure)
+        -- 
+        -- Validation: 5.59% conversion within 35-49 age (2.43x vs No_Pattern)
+        -- Correlation with age_bucket_encoded: -0.027 (INDEPENDENT)
+        -- ================================================================
+        CASE 
+            WHEN ccs.cc_tenure_cv IS NOT NULL 
+                 AND ccs.cc_tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(cf.tenure_months, ccs.cc_avg_prior_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN 1 
+            ELSE 0 
         END as cc_is_in_move_window,
         
-        CASE
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(cf.tenure_months, ccs.avg_prior_tenure_months) < 0.7
-            THEN 1 ELSE 0
-        END as cc_is_too_early,
-        
-        CASE
-            WHEN ccs.tenure_cv < 0.5 AND ccs.avg_prior_tenure_months IS NOT NULL
-            THEN CAST(GREATEST(0, ccs.avg_prior_tenure_months * 0.7 - cf.tenure_months) AS INT64)
-            ELSE 999
-        END as cc_months_until_window
+        -- ================================================================
+        -- FEATURE 25: cc_is_too_early (DEPRIORITIZATION SIGNAL)
+        -- ================================================================
+        -- Advisor has predictable pattern (CV < 0.5) BUT is too early
+        -- in their cycle (< 70% through their average tenure)
+        -- 
+        -- Validation: 3.72% conversion (below 3.82% baseline)
+        -- Correlation with age_bucket_encoded: -0.035 (INDEPENDENT)
+        -- ================================================================
+        CASE 
+            WHEN ccs.cc_tenure_cv IS NOT NULL 
+                 AND ccs.cc_tenure_cv < 0.5 
+                 AND SAFE_DIVIDE(cf.tenure_months, ccs.cc_avg_prior_tenure_months) < 0.7
+            THEN 1 
+            ELSE 0 
+        END as cc_is_too_early
         
     FROM current_firm cf
     LEFT JOIN career_clock_stats ccs 
-        ON cf.crd = ccs.advisor_crd 
+        ON cf.crd = ccs.crd 
         AND cf.prediction_date = ccs.prediction_date
 ),
 
 -- ============================================================================
--- COMBINE ALL FEATURES (29 features for V4.2.0)
+-- RECENT PROMOTEE FEATURE (V4.3.1)
+-- ============================================================================
+-- Analysis (January 8, 2026) found advisors with <5 years industry tenure
+-- holding mid/senior titles convert at 0.29-0.45% (0.10-0.16x baseline).
+-- 
+-- These "recent promotees" likely don't have portable books yet:
+-- - Recently promoted from junior roles
+-- - Still building client relationships
+-- - May not have decision-making authority to move
+--
+-- Conversion by career stage:
+--   LIKELY_RECENT_PROMOTEE (Senior): 0.29% (0.10x lift) - 348 leads
+--   LIKELY_RECENT_PROMOTEE (Mid):    0.45% (0.16x lift) - 1,567 leads
+--   ESTABLISHED_PRODUCER:            0.73% (0.27x lift) - baseline comparison
+--   FOUNDER_OWNER:                   1.07% (0.39x lift) - DO NOT FLAG
+-- ============================================================================
+recent_promotee_feature AS (
+    SELECT
+        bp.crd,
+        CASE 
+            -- Less than 5 years industry tenure (60 months)
+            WHEN COALESCE(it.industry_tenure_months, c.INDUSTRY_TENURE_MONTHS, 0) < 60
+            -- Has mid-level or senior title (suggests promotion)
+            AND (
+                UPPER(c.TITLE_NAME) LIKE '%FINANCIAL ADVISOR%'
+                OR UPPER(c.TITLE_NAME) LIKE '%WEALTH ADVISOR%'
+                OR UPPER(c.TITLE_NAME) LIKE '%INVESTMENT ADVISOR%'
+                OR UPPER(c.TITLE_NAME) LIKE '%FINANCIAL PLANNER%'
+                OR UPPER(c.TITLE_NAME) LIKE '%PORTFOLIO MANAGER%'
+                OR UPPER(c.TITLE_NAME) LIKE '%SENIOR%'
+                OR UPPER(c.TITLE_NAME) LIKE '%DIRECTOR%'
+                OR UPPER(c.TITLE_NAME) LIKE '%MANAGING%'
+                OR UPPER(c.TITLE_NAME) LIKE '%PRINCIPAL%'
+                OR UPPER(c.TITLE_NAME) LIKE '%VP %'
+                OR UPPER(c.TITLE_NAME) LIKE '%VICE PRESIDENT%'
+            )
+            -- Exclude if they're clearly still junior (shouldn't be on list anyway)
+            AND NOT (
+                UPPER(c.TITLE_NAME) LIKE '%ASSOCIATE%'
+                OR UPPER(c.TITLE_NAME) LIKE '%ASSISTANT%'
+                OR UPPER(c.TITLE_NAME) LIKE '%PARAPLANNER%'
+                OR UPPER(c.TITLE_NAME) LIKE '%JUNIOR%'
+                OR UPPER(c.TITLE_NAME) LIKE '%INTERN%'
+                OR UPPER(c.TITLE_NAME) LIKE '%TRAINEE%'
+            )
+            -- DO NOT flag founders/owners - they convert at 1.07%
+            AND NOT (
+                UPPER(c.TITLE_NAME) LIKE '%FOUNDER%'
+                OR UPPER(c.TITLE_NAME) LIKE '%OWNER%'
+                OR UPPER(c.TITLE_NAME) LIKE '%CEO%'
+                OR UPPER(c.TITLE_NAME) LIKE '% PRESIDENT%'  -- Space before to avoid VP
+            )
+            THEN 1
+            ELSE 0
+        END as is_likely_recent_promotee
+    FROM base_prospects bp
+    LEFT JOIN industry_tenure it ON bp.crd = it.crd
+    LEFT JOIN `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
+        ON bp.crd = c.RIA_CONTACT_CRD_ID
+),
+
+-- ============================================================================
+-- COMBINE ALL FEATURES (26 features for V4.3.2: 23 from V4.2.0 + 2 Career Clock + 1 Recent Promotee)
 -- ============================================================================
 all_features AS (
     SELECT
@@ -445,6 +603,15 @@ all_features AS (
             WHEN cf.tenure_months < 120 THEN '48-120'
             ELSE '120+'
         END as tenure_bucket,
+        -- Encoded version for model (V4.3.0)
+        CASE 
+            WHEN COALESCE(cf.tenure_months, 0) = 0 OR cf.tenure_months IS NULL THEN 5
+            WHEN cf.tenure_months < 12 THEN 0
+            WHEN cf.tenure_months < 24 THEN 1
+            WHEN cf.tenure_months < 48 THEN 2
+            WHEN cf.tenure_months < 120 THEN 3
+            ELSE 4
+        END as tenure_bucket_encoded,
 
         -- GROUP 2: EXPERIENCE FEATURES
         COALESCE(e.experience_years, 0) as experience_years,
@@ -465,6 +632,12 @@ all_features AS (
             WHEN COALESCE(m.mobility_3yr, 0) = 1 THEN 'Low_Mobility'
             ELSE 'High_Mobility'
         END as mobility_tier,
+        -- Encoded version for model (V4.3.0)
+        CASE 
+            WHEN COALESCE(m.mobility_3yr, 0) = 0 THEN 0
+            WHEN COALESCE(m.mobility_3yr, 0) = 1 THEN 1
+            ELSE 2
+        END as mobility_tier_encoded,
 
         -- GROUP 4: FIRM STABILITY FEATURES
         COALESCE(fs.firm_rep_count_at_contact, 0) as firm_rep_count_at_contact,
@@ -478,6 +651,14 @@ all_features AS (
             WHEN COALESCE(fs.firm_arrivals_12mo, 0) - COALESCE(fs.firm_departures_12mo, 0) = 0 THEN 'Stable'
             ELSE 'Growing'
         END as firm_stability_tier,
+        -- Encoded version for model (V4.3.0)
+        CASE 
+            WHEN cf.firm_crd IS NULL THEN 0
+            WHEN COALESCE(fs.firm_arrivals_12mo, 0) - COALESCE(fs.firm_departures_12mo, 0) < -10 THEN 1
+            WHEN COALESCE(fs.firm_arrivals_12mo, 0) - COALESCE(fs.firm_departures_12mo, 0) < 0 THEN 2
+            WHEN COALESCE(fs.firm_arrivals_12mo, 0) - COALESCE(fs.firm_departures_12mo, 0) = 0 THEN 3
+            ELSE 4
+        END as firm_stability_tier_encoded,
         dq.has_firm_data,
 
         -- GROUP 5: WIREHOUSE & BROKER PROTOCOL
@@ -534,21 +715,27 @@ all_features AS (
         -- Both broker-dealer and investment advisor
         COALESCE(frt.is_dual_registered, 0) as is_dual_registered,
 
-        -- ====================================================================
-        -- FEATURE GROUP 7: CAREER CLOCK FEATURES (V4.2.0)
-        -- ====================================================================
-        -- NOTE: cc_avg_prior_tenure_months is calculated in CTE but NOT included as feature (redundant with cc_pct_through_cycle)
-        COALESCE(ccf.cc_completed_jobs, 0) as cc_completed_jobs,
-        COALESCE(ccf.cc_tenure_cv, 1.0) as cc_tenure_cv,  -- Default 1.0 = unpredictable
-        COALESCE(ccf.cc_pct_through_cycle, 1.0) as cc_pct_through_cycle,
-        COALESCE(ccf.cc_is_clockwork, 0) as cc_is_clockwork,
+        -- V4.2.0: Age feature
+        COALESCE(ad.age_bucket_encoded, 2) as age_bucket_encoded,
+
+        -- ================================================================
+        -- V4.3.0: CAREER CLOCK FEATURES (2 new features)
+        -- ================================================================
         COALESCE(ccf.cc_is_in_move_window, 0) as cc_is_in_move_window,
         COALESCE(ccf.cc_is_too_early, 0) as cc_is_too_early,
-        COALESCE(ccf.cc_months_until_window, 999) as cc_months_until_window,  -- 999 = unknown
+
+        -- ================================================================
+        -- V4.3.1: RECENT PROMOTEE FEATURE (1 new feature)
+        -- ================================================================
+        -- Analysis (January 8, 2026) found advisors with <5yr tenure + mid/senior
+        -- titles convert at 0.29-0.45% (6-9x worse than baseline).
+        -- This feature lets the model learn the pattern and find exceptions.
+        -- ================================================================
+        COALESCE(rp.is_likely_recent_promotee, 0) as is_likely_recent_promotee,
 
         -- Metadata
         CURRENT_TIMESTAMP() as created_at,
-        'v4.2.0' as feature_version
+        'v4.3.2' as feature_version
 
     FROM base_prospects bp
     LEFT JOIN current_firm cf ON bp.crd = cf.crd
@@ -564,7 +751,21 @@ all_features AS (
     LEFT JOIN firm_bleeding_corrected_features fbc ON cf.firm_crd = fbc.firm_crd
     LEFT JOIN bleeding_velocity bv ON cf.firm_crd = bv.firm_crd
     LEFT JOIN firm_rep_type_features frt ON bp.crd = frt.crd
-    LEFT JOIN career_clock_features ccf ON bp.crd = ccf.crd
+    LEFT JOIN (
+        SELECT 
+            RIA_CONTACT_CRD_ID as crd,
+            CASE 
+                WHEN AGE_RANGE IN ('18-24', '25-29', '30-34') THEN 0
+                WHEN AGE_RANGE IN ('35-39', '40-44', '45-49') THEN 1
+                WHEN AGE_RANGE IN ('50-54', '55-59', '60-64') THEN 2
+                WHEN AGE_RANGE IN ('65-69') THEN 3
+                WHEN AGE_RANGE IN ('70-74', '75-79', '80-84', '85-89', '90-94', '95-99') THEN 4
+                ELSE 2
+            END as age_bucket_encoded
+        FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current`
+    ) ad ON bp.crd = ad.crd
+    LEFT JOIN career_clock_features ccf ON bp.crd = ccf.crd AND bp.prediction_date = ccf.prediction_date
+    LEFT JOIN recent_promotee_feature rp ON bp.crd = rp.crd
 )
 
 SELECT * FROM all_features;

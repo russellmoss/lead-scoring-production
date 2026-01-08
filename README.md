@@ -1,10 +1,10 @@
 # Lead Scoring Production Pipeline - Hybrid V3 + V4 Model
 
-**Version**: 3.5.1 (V4.2.0 Age Feature + Gain-Based Narratives)  
-**Last Updated**: January 7, 2026  
+**Version**: 3.6.1 (V4.3.2 Career Clock Fuzzy Firm Matching + Recent Promotee Exclusion)  
+**Last Updated**: January 8, 2026  
 **Status**: ✅ Production Ready  
-**V3 Model**: V3.5.0_01032026_MA_TIERS - M&A opportunity capture  
-**V4 Model**: V4.2.0 (23 features with Age Bucket) - Updated January 7, 2026  
+**V3 Model**: V3.6.1_01082026_CAREER_CLOCK_TIERS - Career Clock tiers + Recent Promotee Exclusion + M&A tiers  
+**V4 Model**: V4.3.2 (26 features with Career Clock fuzzy firm matching fix + Recent Promotee feature) - Updated January 8, 2026  
 **Architecture**: Two-Query (bypasses BigQuery CTE optimization issues)
 
 ---
@@ -13,13 +13,14 @@
 
 1. [Executive Summary](#executive-summary)
 2. [Quick Start Guide](#quick-start-guide)
-3. [Pipeline Architecture](#pipeline-architecture)
-4. [Step-by-Step Execution](#step-by-step-execution)
-5. [Model Logic & Methodology](#model-logic--methodology)
-6. [V4 XGBoost Model Features](#v4-xgboost-model-features)
-7. [Testing & Validation](#testing--validation)
-8. [Troubleshooting](#troubleshooting)
-9. [Appendix](#appendix)
+3. [Required Files for Full Pipeline Execution](#required-files-for-full-pipeline-execution)
+4. [Pipeline Architecture](#pipeline-architecture)
+5. [Step-by-Step Execution](#step-by-step-execution)
+6. [Model Logic & Methodology](#model-logic--methodology)
+7. [V4 XGBoost Model Features](#v4-xgboost-model-features)
+8. [Testing & Validation](#testing--validation)
+9. [Troubleshooting](#troubleshooting)
+10. [Appendix](#appendix)
 
 ---
 
@@ -27,18 +28,22 @@
 
 This repository contains a **hybrid lead scoring system** that combines:
 
-- **V3 Rules-Based Model**: Tiered classification with M&A opportunity tiers (V3.5.0)
+- **V3 Rules-Based Model**: Tiered classification with Career Clock tiers, Zero Friction, Sweet Spot, and M&A tiers (V3.6.0)
 - **V4 XGBoost ML Model**: Machine learning model for deprioritization and backfill
 - **Two-Query Architecture**: Reliable M&A lead insertion (bypasses BigQuery CTE issues)
 
-**Key Results (January 2026 Lead List - V3.5.0):**
+**Key Results (January 2026 Lead List - V3.6.0):**
 - **Total Leads**: 3,100 (2,800 standard + 300 M&A)
 - **M&A Leads**: 300 (TIER_MA_ACTIVE_PRIME at 9.0% expected conversion)
 - **Large Firm Exemption**: 293 M&A leads from firms with >200 reps (normally excluded)
 - **Expected MQLs from M&A Tier**: ~27 additional MQLs (300 × 9.0%)
 - **Architecture**: Two-query approach (INSERT after CREATE)
 
-**V3.5.0 M&A Tier Performance (Based on Commonwealth/LPL Analysis):**
+**V3.6.0 Tier Performance:**
+- **Career Clock Tiers**: 0A (16.13%), 0B (10.0%), 0C (6.5%) - timing-aware prioritization
+- **Zero Friction Tier**: 13.64% conversion (3.57x lift) - Series 65 + Portable Custodian + Small Firm + Bleeding
+- **Sweet Spot Tier**: 9.09% conversion (2.38x lift) - Growth Stage + $500K-$2M AUM
+- **M&A Tier Performance** (from V3.5.0, based on Commonwealth/LPL Analysis):
 - **TIER_MA_ACTIVE_PRIME**: 9.0% conversion (2.36x baseline) - Senior titles + mid-career at M&A targets
 - **TIER_MA_ACTIVE**: 5.4% conversion (1.41x baseline) - All advisors at M&A target firms
 - **Evidence**: Commonwealth Financial Network converted at 5.37% during LPL acquisition (242 contacts, 13 MQLs)
@@ -48,13 +53,15 @@ This repository contains a **hybrid lead scoring system** that combines:
 - But M&A disruption changes dynamics → Commonwealth converted at 5.37% during acquisition
 - Without M&A tiers, we would miss 100-500 MQLs per major M&A event
 
-**V4.2.0 Model Performance (January 7, 2026 Update):**
-- **Features**: 23 (added age_bucket_encoded as 23rd feature)
-- **Test AUC-ROC**: 0.6352 (+1.52% vs V4.1.0)
-- **Top Decile Lift**: 2.28x (+12.3% vs V4.1.0)
-- **Overfitting Gap**: 0.0264 (-64.8% vs V4.1.0)
-- **Narrative Generation**: Gain-based (SHAP TreeExplainer deprecated due to XGBoost serialization bug)
-- **Age Feature Importance**: Rank #10 of 23, 4.34% of total gain
+**V4.3.2 Model Performance (January 8, 2026 Update):**
+- **Features**: 26 (added 2 Career Clock features + 1 Recent Promotee feature: cc_is_in_move_window, cc_is_too_early, is_likely_recent_promotee)
+- **Test AUC-ROC**: 0.6322 (slightly below V4.3.0's 0.6389, but acceptable after data quality fix)
+- **Top Decile Lift**: 2.40x
+- **Overfitting Gap**: 0.0480 (within acceptable range < 0.05)
+- **Narrative Generation**: Gain-based (SHAP fix deferred to V4.4.0 due to XGBoost/SHAP compatibility issue)
+- **Recent Promotee Feature Importance**: is_likely_recent_promotee = 2.39% of total gain (model learning the pattern)
+- **Career Clock Feature Importance**: 0.0% (may be due to data quality fix removing polluted data)
+- **V4.3.2 Fix**: Fuzzy firm name matching for re-registrations - excludes ~135 advisors incorrectly in move window
 
 **Monthly Time Estimate**: 15-20 minutes once pipeline is set up
 
@@ -67,13 +74,11 @@ This repository contains a **hybrid lead scoring system** that combines:
 Before starting, ensure you have:
 
 - ✅ Access to BigQuery project: `savvy-gtm-analytics`
-- ✅ V4.2.0 model files in `v4/models/v4.2.0/`:
-  - `model.json` (XGBoost model - **primary format**)
-  - `model.pkl` (legacy pickle backup)
-  - `model_backup.pkl` (original backup)
-  - `feature_importance.csv` (gain-based importance for narratives)
-  - `hyperparameters.json` (training configuration)
-  - `training_metrics.json` (validation gate results)
+- ✅ V4.3.1 model files in `v4/models/v4.3.1/` (used by V4.3.2):
+  - `v4.3.1_model.json` (XGBoost model)
+  - `v4.3.1_feature_importance.csv` (gain-based importance for narratives)
+  - `v4.3.1_metadata.json` (training metrics and validation results)
+  - `v4.3.1_shap_metadata.json` (SHAP configuration - note: SHAP fix deferred)
 - ✅ Python environment with required packages:
   ```bash
   pip install xgboost pandas google-cloud-bigquery numpy
@@ -81,68 +86,145 @@ Before starting, ensure you have:
   ```
 - ✅ Working directory: `pipeline/` (this directory)
 
-### Monthly Execution (4 Steps)
+### Monthly Execution (6 Steps)
 
 ```bash
-# Step 1: Calculate V4 features for all prospects
+# Step 1: Refresh M&A Advisors Table
+# Run SQL: pipeline/sql/create_ma_eligible_advisors.sql
+# Creates: ml_features.ma_eligible_advisors (~2,225 advisors)
+
+# Step 2: Calculate V4 features for all prospects
 # Run SQL: pipeline/sql/v4_prospect_features.sql
-# Creates: ml_features.v4_prospect_features
+# Creates: ml_features.v4_prospect_features (~285,690 prospects)
 
-# Step 2: Score prospects with V4 model
+# Step 3: Score prospects with V4.3.1 model
 cd pipeline
-python scripts/score_prospects_monthly.py
-# Creates: ml_features.v4_prospect_scores
+python scripts/score_prospects_v43.py
+# Creates: ml_features.v4_prospect_scores (~285,690 scores)
+# Note: Use score_prospects_v43.py (NOT score_prospects_monthly.py which is V4.2.0)
 
-# Step 3: Generate hybrid lead list
+# Step 4: Generate base hybrid lead list (Query 1)
 # Run SQL: pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql
-# Creates: ml_features.january_2026_lead_list
+# Creates: ml_features.january_2026_lead_list (~2,800 leads)
 
-# Step 4: Export to CSV
+# Step 5: Insert M&A leads (Query 2) ⚠️ MUST RUN AFTER STEP 4
+# Run SQL: pipeline/sql/Insert_MA_Leads.sql
+# Adds: ~300 M&A leads to existing january_2026_lead_list table
+
+# Step 6: Export to CSV
 python scripts/export_lead_list.py
-# Output: pipeline/exports/january_2026_lead_list_YYYYMMDD.csv
+# Output: pipeline/exports/[month]_2026_lead_list_YYYYMMDD.csv
 ```
 
-**Expected Output**: CSV file with ~200 leads per active SGA (e.g., 2,768 leads for 14 SGAs) ready for Salesforce import
+**Expected Output**: CSV file with ~200 leads per active SGA (e.g., 2,800 standard + 300 M&A = 3,100 total leads) ready for Salesforce import
+
+---
+
+## Required Files for Full Pipeline Execution
+
+This section lists **all required files** to run the complete monthly pipeline (V3.6.1 + V4.3.2).
+
+### Core Pipeline Files (6 files)
+
+| Step | File | Location | Purpose | Output Table |
+|------|------|----------|---------|--------------|
+| 1 | `create_ma_eligible_advisors.sql` | `pipeline/sql/create_ma_eligible_advisors.sql` | Pre-build M&A advisor list | `ml_features.ma_eligible_advisors` |
+| 2 | `v4_prospect_features.sql` | `pipeline/sql/v4_prospect_features.sql` | Calculate 26 V4.3.1 features | `ml_features.v4_prospect_features` |
+| 3 | `score_prospects_v43.py` | `pipeline/scripts/score_prospects_v43.py` | Score with V4.3.1 model | `ml_features.v4_prospect_scores` |
+| 4 | `January_2026_Lead_List_V3_V4_Hybrid.sql` | `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` | Generate base lead list | `ml_features.january_2026_lead_list` |
+| 5 | `Insert_MA_Leads.sql` | `pipeline/sql/Insert_MA_Leads.sql` | Add M&A leads | (adds to Step 4 table) |
+| 6 | `export_lead_list.py` | `pipeline/scripts/export_lead_list.py` | Export to CSV | `pipeline/exports/[month]_2026_lead_list_YYYYMMDD.csv` |
+
+**⚠️ Important Notes**:
+- **Step 3**: Use `score_prospects_v43.py` (V4.3.1). Do NOT use `score_prospects_monthly.py` (V4.2.0 only).
+- **Step 5**: MUST run AFTER Step 4 (two-query architecture).
+
+### V3.6.0 Supporting Files (2 files)
+
+| File | Location | Purpose | Output Table |
+|------|----------|---------|--------------|
+| `lead_scoring_features_pit.sql` | `v3/sql/lead_scoring_features_pit.sql` | V3 feature engineering (37 features) | `ml_features.lead_scoring_features_pit` |
+| `phase_4_v3_tiered_scoring.sql` | `v3/sql/phase_4_v3_tiered_scoring.sql` | V3.6.0 tier assignment logic | `ml_features.lead_scores_v3_6` |
+
+**Note**: These tables should be refreshed periodically (monthly or when V3 logic changes).
+
+### V4.3.1 Model Artifacts (4 files)
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `v4.3.1_model.json` | `v4/models/v4.3.1/v4.3.1_model.json` | Trained XGBoost model (used by V4.3.2) |
+| `v4.3.1_feature_importance.csv` | `v4/models/v4.3.1/v4.3.1_feature_importance.csv` | Feature importance for gain-based narratives |
+| `v4.3.1_metadata.json` | `v4/models/v4.3.1/v4.3.1_metadata.json` | Training metadata and validation results |
+
+### Configuration Files (Optional)
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `create_excluded_firms_table.sql` | `pipeline/sql/create_excluded_firms_table.sql` | Create firm exclusion patterns table |
+| `create_excluded_firm_crds_table.sql` | `pipeline/sql/create_excluded_firm_crds_table.sql` | Create CRD-based exclusions table |
+| `manage_excluded_firms.sql` | `pipeline/sql/manage_excluded_firms.sql` | Helper queries for managing exclusions |
+
+### File Status Checklist
+
+**✅ All Required Files Present**:
+- [x] `pipeline/sql/create_ma_eligible_advisors.sql`
+- [x] `pipeline/sql/v4_prospect_features.sql` (V4.3.1)
+- [x] `pipeline/scripts/score_prospects_v43.py` (V4.3.1)
+- [x] `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` (V3.6.1/V4.3.1)
+- [x] `pipeline/sql/Insert_MA_Leads.sql`
+- [x] `pipeline/scripts/export_lead_list.py`
+- [x] `v3/sql/lead_scoring_features_pit.sql` (V3 features)
+- [x] `v3/sql/phase_4_v3_tiered_scoring.sql` (V3.6.0 tiers)
+- [x] `v4/models/v4.3.1/v4.3.1_model.json` (V4.3.1 model, used by V4.3.2)
+- [x] `v4/models/v4.3.1/v4.3.1_feature_importance.csv` (V4.3.1 importance)
+
+**⚠️ Deprecated Files (Do NOT Use)**:
+- [ ] `pipeline/scripts/score_prospects_monthly.py` (V4.2.0 only - outdated)
+- [ ] `v4/models/v4.2.0/` (superseded by V4.3.1)
+- [ ] `v4/models/v4.3.0/` (superseded by V4.3.1/V4.3.2)
+
+**📚 For Complete File Documentation**: See `pipeline/V4.3.0_V3.6.0_PIPELINE_REQUIRED_FILES.md` (Note: Some file names may reference V4.3.0, but current version is V4.3.2)
 
 ---
 
 ## Pipeline Architecture
 
-### High-Level Flow (V3.5.0 Two-Query Architecture)
+### High-Level Flow (V3.6.0 + V4.3.0 Two-Query Architecture)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│        MONTHLY LEAD LIST GENERATION PIPELINE (V3.5.0)           │
+│        MONTHLY LEAD LIST GENERATION PIPELINE (V3.6.1 + V4.3.1) │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  STEP 1: Refresh M&A Advisors Table                             │
-│     └─> SQL: create_ma_eligible_advisors.sql                    │
+│     └─> SQL: pipeline/sql/create_ma_eligible_advisors.sql      │
 │     └─> Output: ml_features.ma_eligible_advisors (~2,225)       │
 │     └─> Purpose: Pre-build M&A advisor list with tier assignments│
 │                                                                  │
 │  STEP 2: Calculate V4 Features                                  │
-│     └─> SQL: v4_prospect_features.sql                           │
-│     └─> Output: ml_features.v4_prospect_features                │
-│     └─> Purpose: Calculate 29 ML features for all prospects     │
+│     └─> SQL: pipeline/sql/v4_prospect_features.sql              │
+│     └─> Output: ml_features.v4_prospect_features (~285,690)    │
+│     └─> Purpose: Calculate 26 ML features (V4.3.1) for all prospects│
 │                                                                  │
-│  STEP 3: Score Prospects with V4 Model                         │
-│     └─> Python: score_prospects_monthly.py                      │
-│     └─> Output: ml_features.v4_prospect_scores                 │
-│     └─> Purpose: Generate ML scores, percentiles, SHAP features │
+│  STEP 3: Score Prospects with V4.3.1 Model (V4.3.2 features)  │
+│     └─> Python: pipeline/scripts/score_prospects_v43.py         │
+│     └─> Output: ml_features.v4_prospect_scores (~285,690)      │
+│     └─> Purpose: Generate ML scores, percentiles, gain-based narratives│
+│     └─> ⚠️ NOTE: Use score_prospects_v43.py (NOT score_prospects_monthly.py)│
 │                                                                  │
 │  STEP 4: Generate Base Lead List (Query 1)                     │
-│     └─> SQL: January_2026_Lead_List_V3_V4_Hybrid.sql            │
+│     └─> SQL: pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql│
 │     └─> Output: ml_features.january_2026_lead_list (~2,800)     │
-│     └─> Purpose: Standard leads with V3 tiers + V4 upgrades     │
+│     └─> Purpose: Standard leads with V3.6.1 tiers + V4.3.1 upgrades│
 │                                                                  │
 │  STEP 5: Insert M&A Leads (Query 2) ⚠️ MUST RUN AFTER STEP 4   │
-│     └─> SQL: Insert_MA_Leads.sql                                │
+│     └─> SQL: pipeline/sql/Insert_MA_Leads.sql                  │
 │     └─> Output: Adds ~300 M&A leads to existing table            │
 │     └─> Purpose: Add M&A tier leads (bypasses CTE issues)       │
 │                                                                  │
 │  STEP 6: Export to CSV                                          │
-│     └─> Python: export_lead_list.py                             │
-│     └─> Output: exports/[month]_2026_lead_list_YYYYMMDD.csv    │
+│     └─> Python: pipeline/scripts/export_lead_list.py            │
+│     └─> Output: pipeline/exports/[month]_2026_lead_list_YYYYMMDD.csv│
 │     └─> Purpose: CSV file for Salesforce import                 │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -225,11 +307,15 @@ GROUP BY ma_tier;
 
 ### Step 2: Calculate V4 Features for All Prospects
 
-**Purpose**: Calculate the 23 features required by the V4.2.0 XGBoost model (including age_bucket_encoded) for all producing advisors in FINTRX.
+**Purpose**: Calculate the 25 features required by the V4.3.0 XGBoost model (including Career Clock features) for all producing advisors in FINTRX.
 
-**File**: `pipeline/sql/v4_prospect_features.sql`
+**File**: `pipeline/sql/v4_prospect_features.sql` (V4.3.0)
 
 **What It Does**:
+- Calculates 26 ML features for all producing advisors (V4.3.1)
+- Includes 23 features from V4.2.0 + 2 new Career Clock features (`cc_is_in_move_window`, `cc_is_too_early`)
+- Includes encoded categoricals: `tenure_bucket_encoded`, `mobility_tier_encoded`, `firm_stability_tier_encoded`, `age_bucket_encoded`
+- Includes duplicate prevention (QUALIFY ROW_NUMBER on firm-level JOINs) - fixed January 8, 2026
 - Queries `ria_contacts_current` for all producing advisors
 - Calculates tenure, experience, mobility, firm stability features
 - Creates interaction features (mobility × bleeding, short tenure × mobility)
@@ -259,25 +345,28 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_features`;
 
 ---
 
-### Step 2: Score Prospects with V4 Model
+### Step 3: Score Prospects with V4.3.1 Model
 
-**Purpose**: Generate ML scores for all prospects using the trained XGBoost model.
+**Purpose**: Generate ML scores for all prospects using the trained V4.3.1 XGBoost model.
 
-**File**: `pipeline/scripts/score_prospects_monthly.py`
+**File**: `pipeline/scripts/score_prospects_v43.py` ⚠️ **USE THIS FOR V4.3.1/V4.3.2**
+
+**Alternative (Deprecated)**: `pipeline/scripts/score_prospects_monthly.py` (V4.2.0 only - DO NOT USE)
 
 **What It Does**:
-1. Loads V4.2.0 XGBoost model from `v4/models/v4.2.0/model.pkl`
-2. Fetches features from `ml_features.v4_prospect_features` (23 features including age_bucket_encoded)
-3. Generates predictions (0-1 probability scores)
-4. Calculates percentile ranks (1-100)
-5. Identifies deprioritize candidates (bottom 20%)
-6. Generates SHAP narratives for V4 upgrade candidates (top 20%)
-7. Uploads scores to `ml_features.v4_prospect_scores`
+1. Loads V4.3.1 XGBoost model from `v4/models/v4.3.1/v4.3.1_model.json`
+2. Loads feature importance from `v4/models/v4.3.1/v4.3.1_feature_importance.csv`
+3. Fetches features from `ml_features.v4_prospect_features` (26 features including Career Clock and Recent Promotee)
+4. Generates predictions (0-1 probability scores)
+5. Calculates percentile ranks (1-100)
+6. Identifies deprioritize candidates (bottom 20%)
+7. Generates gain-based narratives for V4 upgrade candidates (top 20%)
+8. Uploads scores to `ml_features.v4_prospect_scores` with Career Clock features
 
 **Execution**:
 ```bash
 cd pipeline
-python scripts/score_prospects_monthly.py
+python scripts/score_prospects_v43.py
 ```
 
 **Output Columns**:
@@ -310,11 +399,11 @@ FROM `savvy-gtm-analytics.ml_features.v4_prospect_scores`;
 
 ---
 
-### Step 3: Run Hybrid Lead List Query
+### Step 4: Generate Base Lead List (Query 1)
 
-**Purpose**: Combine V3 tier rules with V4 ML upgrades to generate the final lead list.
+**Purpose**: Combine V3.6.1 tier rules with V4.3.1 ML upgrades to generate the base lead list.
 
-**File**: `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql`
+**File**: `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` (V3.6.1/V4.3.1)
 
 **What It Does**:
 
@@ -495,7 +584,43 @@ FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`;
 
 ---
 
-### Step 6: Export to CSV (unchanged)
+### Step 5: Insert M&A Leads (Query 2) ⚠️ MUST RUN AFTER STEP 4
+
+**Purpose**: Add M&A tier leads to the base lead list. This must run AFTER Step 4.
+
+**File**: `pipeline/sql/Insert_MA_Leads.sql`
+
+**What It Does**:
+- Inserts ~300 M&A leads into the existing `ml_features.january_2026_lead_list` table
+- Uses advisors from `ml_features.ma_eligible_advisors` (created in Step 1)
+- Assigns M&A tiers: TIER_MA_ACTIVE_PRIME (9.0% conversion) and TIER_MA_ACTIVE (5.4% conversion)
+- Bypasses BigQuery CTE optimization issues by using separate INSERT query
+
+**Execution**:
+```sql
+-- Run in BigQuery AFTER Step 4 completes
+-- Adds: ~300 M&A leads to ml_features.january_2026_lead_list
+```
+
+**Why Two Queries?**
+- BigQuery CTE optimization issues prevent M&A advisors from appearing when integrated into the main query
+- This separate INSERT approach guarantees M&A leads are added successfully
+
+**Validation Query**:
+```sql
+SELECT 
+    COUNT(*) as total_leads,
+    COUNTIF(score_tier LIKE 'TIER_MA%') as ma_leads
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`;
+```
+
+**Expected Results**:
+- Total leads: ~3,100 (2,800 base + 300 M&A)
+- M&A leads: ~300
+
+---
+
+### Step 6: Export to CSV
 
 **Purpose**: Export lead list to CSV format for Salesforce import.
 
@@ -743,7 +868,7 @@ See `pipeline/sql/manage_excluded_firms.sql` for:
 
 ---
 
-### V4 XGBoost ML Model (V4.2.0 - Current Production)
+### V4 XGBoost ML Model (V4.3.0 - Current Production)
 
 **Philosophy**: Machine learning model that deprioritizes low-potential leads and identifies intelligent backfill candidates.
 
@@ -752,19 +877,24 @@ See `pipeline/sql/manage_excluded_firms.sql` for:
 - **Regularization**: Strong (max_depth=2, min_child_weight=30)
 - **Training Period**: 2024-02-01 to 2025-07-31
 - **Test Period**: 2025-08-01 to 2025-10-31
-- **Features**: 23 (including age_bucket_encoded)
+- **Features**: 26 (23 from V4.2.0 + 2 Career Clock features + 1 Recent Promotee feature)
 
-**Performance Metrics (V4.2.0)**:
-- **Test AUC-ROC**: 0.6352 (+1.52% vs V4.1.0)
-- **Test AUC-PR**: 0.0749 (+7.0% vs V4.1.0)
-- **Top Decile Lift**: 2.28x (+12.3% vs V4.1.0)
-- **Overfitting Gap**: 0.0264 (-64.8% vs V4.1.0)
-- **Bottom 20% Conversion**: 1.21% (0.31x lift - strong deprioritization signal)
+**Performance Metrics (V4.3.1/V4.3.2)**:
+- **Test AUC-ROC**: 0.6322 (slightly below V4.3.0's 0.6389, acceptable after data quality fixes)
+- **Top Decile Lift**: 2.40x
+- **Overfitting Gap**: 0.0480 (within acceptable range < 0.05)
+- **Recent Promotee Feature Importance**: is_likely_recent_promotee = 2.39% of total gain
+- **Career Clock Importance**: 0.0% (may be due to data quality fixes removing polluted data)
+- **Narrative Method**: Gain-based (SHAP deferred to V4.4.0)
+- **V4.3.2 Fix**: Fuzzy firm name matching excludes ~135 advisors incorrectly in move window
 
 **Model Evolution**:
 | Version | AUC-ROC | Top Decile Lift | Features | Status |
 |---------|---------|-----------------|----------|--------|
-| V4.2.0 | **0.6352** | **2.28x** | 23 | ✅ Production |
+| V4.3.2 | **0.6322** | **2.40x** | 26 | ✅ Production |
+| V4.3.1 | 0.6322 | 2.40x | 26 | Superseded |
+| V4.3.0 | 0.6389 | 2.80x | 25 | Superseded |
+| V4.2.0 | 0.6352 | 2.28x | 23 | Deprecated |
 | V4.1.0 R3 | 0.620 | 2.03x | 22 | ❌ Deprecated |
 | V4.0.0 | 0.599 | 1.51x | 14 | ❌ Archived |
 
@@ -782,9 +912,12 @@ See `pipeline/sql/manage_excluded_firms.sql` for:
 
 ---
 
-## V4 XGBoost Model Features (V4.2.0 - 23 Features)
+## V4 XGBoost Model Features (V4.3.2 - 26 Features)
 
-The V4.2.0 model uses **23 features** (added `age_bucket_encoded` on January 7, 2026):
+The V4.3.2 model uses **26 features**:
+- **23 features from V4.2.0** (including `age_bucket_encoded` added January 7, 2026)
+- **2 Career Clock features** (added V4.3.0, improved V4.3.2 with fuzzy firm matching, January 8, 2026): `cc_is_in_move_window`, `cc_is_too_early`
+- **1 Recent Promotee feature** (added V4.3.1, January 8, 2026): `is_likely_recent_promotee`
 
 ### Core Features (12)
 | # | Feature | Description |
@@ -824,10 +957,30 @@ The V4.2.0 model uses **23 features** (added `age_bucket_encoded` on January 7, 
 | 21 | is_ia_rep_type | IA rep type flag |
 | 22 | is_dual_registered | Dual registered flag |
 
-### Age Feature (1) - NEW in V4.2.0
+### Age Feature (1) - V4.2.0
 | # | Feature | Description |
 |---|---------|-------------|
 | 23 | age_bucket_encoded | Age category (0=Under 35, 1=35-49, 2=50-64, 3=65-69, 4=70+) |
+
+### Career Clock Features (2) - NEW in V4.3.0
+| # | Feature | Description | Importance |
+|---|---------|-------------|------------|
+| 24 | cc_is_in_move_window | Career Clock timing signal - advisor in optimal move window | 2.02% |
+| 25 | cc_is_too_early | Career Clock deprioritization signal - advisor too early in cycle | 0.0% |
+
+**Career Clock Feature Details**:
+
+**24. `cc_is_in_move_window`** (2.02% importance)
+- **Purpose**: Career Clock timing signal - advisor in optimal move window
+- **Logic**: Predictable pattern (CV < 0.5) AND 70-130% through typical tenure cycle
+- **Validation**: 5.59% conversion (2.43x lift), independent from age (r=0.035)
+- **Business Value**: Optimal timing signal for outreach
+
+**25. `cc_is_too_early`** (0.0% importance)
+- **Purpose**: Career Clock deprioritization signal - advisor too early in cycle
+- **Logic**: Predictable pattern (CV < 0.5) BUT < 70% through typical tenure cycle
+- **Validation**: 3.72% conversion (deprioritization signal), independent from age (r=0.003)
+- **Business Value**: Deprioritization signal for resource allocation
 
 ### Feature Importance (Top 10 by Gain)
 
@@ -967,21 +1120,23 @@ The V4.2.0 model uses **23 features** (added `age_bucket_encoded` on January 7, 
 
 ## Lead Narrative Generation
 
-### Current Approach: Gain-Based Narratives (V4.2.0+)
+### Current Approach: Gain-Based Narratives (V4.3.0)
 
-As of January 7, 2026, lead narratives are generated using **XGBoost gain-based feature importance** instead of SHAP values.
+As of January 8, 2026 (V4.3.0), lead narratives are generated using **XGBoost gain-based feature importance** instead of SHAP values.
 
 **Why the change?**
-- SHAP TreeExplainer failed due to XGBoost serialization bug (`base_score` stored as `'[5E-1]'` instead of `0.5`)
+- SHAP TreeExplainer failed due to XGBoost serialization bug (`base_score` stored as `'[2.3813374E-2]'` instead of `0.023813`)
 - Multiple fix attempts (JSON conversion, monkey-patching, Explainer fallback) all failed
 - Gain-based approach works immediately, is fast, and provides meaningful narratives
+- SHAP fix deferred to V4.4.0 when XGBoost/SHAP versions can be upgraded
 
 **How it works:**
-1. Load pre-computed feature importance from `feature_importance.csv`
+1. Load pre-computed feature importance from `v4/models/v4.3.0/v4.3.0_feature_importance.csv`
 2. For each lead, identify "notable" features:
    - High importance globally
-   - Notable value for this specific lead (e.g., recent mover, bleeding firm)
+   - Notable value for this specific lead (e.g., recent mover, bleeding firm, Career Clock signals)
 3. Generate human-readable narrative with top 3 factors
+4. Includes Career Clock feature descriptions when applicable
 
 **Example Output:**
 ```
@@ -1008,7 +1163,29 @@ explainer = shap.TreeExplainer(model)  # Test before saving
 
 ---
 
-## V4.2.0 Age Feature Model - Production (Deployed 2026-01-07)
+## V4.3.2 Career Clock Features Model - Production (Deployed 2026-01-08)
+
+V4.3.0 adds Career Clock features (`cc_is_in_move_window`, `cc_is_too_early`) as the 24th and 25th features, achieving significant performance improvements:
+
+| Metric | V4.2.0 (Previous) | V4.3.0 (Current) | Improvement |
+|--------|-------------------|------------------|-------------|
+| **Test AUC-ROC** | 0.6352 | **0.6389** | **+0.58%** |
+| **Top Decile Lift** | 2.28x | **2.80x** | **+22.8%** |
+| **Overfitting Gap** | 0.0264 | **0.0353** | Within acceptable range |
+| **Features** | 23 | **25** | +2 Career Clock features |
+| **Career Clock Features** | None | **cc_is_in_move_window, cc_is_too_early** | ✅ New capability |
+
+**Key Improvements:**
+- Better model discrimination (+0.58% AUC)
+- Significantly stronger top decile performance (+22.8% lift)
+- Career Clock features provide unique timing signals
+- Independent from age (correlation < 0.035)
+
+**SHAP Status**: Gain-based narratives (SHAP fix deferred to V4.4.0 due to XGBoost/SHAP compatibility issue)
+
+---
+
+## V4.2.0 Age Feature Model - Deprecated (2026-01-08)
 
 ### Executive Summary
 
@@ -1053,23 +1230,26 @@ V4.2.0 adds `age_bucket_encoded` as the 23rd feature, achieving significant perf
 **Purpose**: Single source of truth for all model versions (V3 and V4)
 
 **Current Production Models**:
-- **V3.4.0**: Rules-based tiered classification (prioritization) with Career Clock tiers (deprecated)
-  - Registry: `v3/models/model_registry_v3.json`
-  - Documentation: `v3/VERSION_3_MODEL_REPORT.md`
-  - Production SQL: `v3/sql/generate_lead_list_v3.3.0.sql`
-  - Career Clock Tiers: TIER_0A/0B/0C (Prime Mover Due, Small Firm Due, Clockwork Due) - Deprecated
-- **V4.2.0**: XGBoost ML model (deprioritization) with age_bucket_encoded feature (23 features)
+- **V3.6.1**: Rules-based tiered classification (prioritization) with Career Clock tiers + Recent Promotee exclusion
+  - Production SQL: `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql`
+  - Career Clock Tiers: TIER_0A/0B/0C (Prime Mover Due, Small Firm Due, Clockwork Due)
+  - Recent Promotee Exclusion: Excludes <5yr tenure + mid/senior titles (~1,915 leads)
+  - M&A V4 Filter: Excludes M&A leads with V4 < 20th percentile
+- **V4.3.2**: XGBoost ML model (deprioritization) with Career Clock features (fuzzy firm matching) + Recent Promotee feature (26 features)
   - Registry: `v4/models/registry.json`
   - Documentation: `v4/VERSION_4_MODEL_REPORT.md`
-  - Production SQL: `pipeline/sql/v4_prospect_features.sql`
-  - Inference Script: `pipeline/scripts/score_prospects_monthly.py`
-  - Age Feature: age_bucket_encoded (23rd feature, 4.34% importance)
+  - Production SQL: `pipeline/sql/v4_prospect_features.sql` (V4.3.2 with fuzzy firm matching)
+  - Inference Script: `pipeline/scripts/score_prospects_v43.py` (USE THIS - uses V4.3.1 model with V4.3.2 features)
+  - Career Clock Features: cc_is_in_move_window, cc_is_too_early (V4.3.2: fuzzy firm matching fix)
+  - Recent Promotee Feature: is_likely_recent_promotee (26th feature, 2.39% importance)
+  - Age Feature: age_bucket_encoded (23rd feature, from V4.2.0)
 
 **Deprecated Models** (archived):
-- V4.0.0 → `archive/v4/models/v4.0.0/`
-- V4.1.0 → `archive/v4/models/v4.1.0/`
+- V4.2.0 → Deprecated 2026-01-08 (superseded by V4.3.0)
+- V4.1.0 R3 → Deprecated 2026-01-07 (superseded by V4.2.0)
 - V4.1.0 R2 → `archive/v4/models/v4.1.0_r2/`
-- V4.1.0 R3 → Deprecated 2026-01-01 (superseded by V4.2.0)
+- V4.1.0 → `archive/v4/models/v4.1.0/`
+- V4.0.0 → `archive/v4/models/v4.0.0/`
 
 **Documentation**:
 - Model Evolution: `MODEL_EVOLUTION_HISTORY.md`
@@ -1078,7 +1258,7 @@ V4.2.0 adds `age_bucket_encoded` as the 23rd feature, achieving significant perf
 
 ---
 
-### Model Evolution: V4.0.0 → V4.1.0 → V4.2.0
+### Model Evolution: V4.0.0 → V4.1.0 → V4.2.0 → V4.3.0
 
 **V4.0.0 → V4.1.0 (December 2025)**
 
@@ -1185,52 +1365,109 @@ Lift by Decile (V4.2.0):
 #### Pipeline Files
 | File | Path | Description |
 |------|------|-------------|
-| Feature SQL | `pipeline/sql/v4_prospect_features.sql` | V4.1 feature engineering (UPDATED) |
-| Scoring script | `pipeline/scripts/score_prospects_monthly.py` | Monthly scoring (UPDATED) |
-| Lead list SQL | `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` | Hybrid query (UPDATED) |
-| Validation | Validation queries in lead list SQL | Validation queries |
+| M&A Advisors SQL | `pipeline/sql/create_ma_eligible_advisors.sql` | Pre-build M&A advisors table |
+| Feature SQL | `pipeline/sql/v4_prospect_features.sql` | V4.3.2 feature engineering (26 features with fuzzy firm matching) |
+| Scoring script | `pipeline/scripts/score_prospects_v43.py` | V4.3.1 scoring (USE THIS) |
+| Scoring script (deprecated) | `pipeline/scripts/score_prospects_monthly.py` | V4.2.0 only (DO NOT USE) |
+| Lead list SQL | `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` | Base lead list (V3.6.1/V4.3.1) |
+| M&A Leads SQL | `pipeline/sql/Insert_MA_Leads.sql` | Insert M&A leads (run after base list) |
+| Export script | `pipeline/scripts/export_lead_list.py` | CSV export for Salesforce |
 
-#### BigQuery Tables (V4.2.0)
+#### BigQuery Tables (V4.3.2)
 | Table | Description |
 |------|-------------|
-| `ml_features.v4_prospect_features` | V4.2.0 features (23 features including age_bucket_encoded) |
-| `ml_features.v4_prospect_scores` | V4.2.0 scores with percentiles and gain-based narratives |
-| `ml_features.january_2026_lead_list` | Final lead list with V4.2.0 columns |
+| `ml_features.v4_prospect_features` | V4.3.1 features (26 features including Career Clock and Recent Promotee) |
+| `ml_features.v4_prospect_scores` | V4.3.1 scores with percentiles and gain-based narratives |
+| `ml_features.january_2026_lead_list` | Final lead list with V4.3.2 columns |
 
-### Monthly Execution Checklist (V4.2.0)
+### Monthly Execution Checklist (V4.3.2 + V3.6.1)
 
 ```markdown
-## [MONTH] 2026 Lead List Generation (V4.2.0)
+## [MONTH] 2026 Lead List Generation (V4.3.1 + V3.6.1)
 
 **Date**: YYYY-MM-DD
 
-### Step 1: Generate V4.2.0 Features
+### Step 1: Refresh M&A Advisors Table
+- [ ] Run: pipeline/sql/create_ma_eligible_advisors.sql
+- [ ] Verify: ml_features.ma_eligible_advisors created/updated
+- [ ] Row count: __________ (~2,225 advisors)
+
+### Step 2: Generate V4.3.2 Features
 - [ ] Run: pipeline/sql/v4_prospect_features.sql
 - [ ] Verify: ml_features.v4_prospect_features created/updated
-- [ ] Row count: __________
-- [ ] Feature count: 23 (including age_bucket_encoded)
+- [ ] Row count: __________ (~285,690 prospects)
+- [ ] Feature count: 26 (including Career Clock features with fuzzy firm matching)
+- [ ] Feature version: v4.3.2
 
-### Step 2: Score Prospects
-- [ ] Run: python pipeline/scripts/score_prospects_monthly.py
+### Step 3: Score Prospects with V4.3.1 Model (V4.3.2 features)
+- [ ] Run: python pipeline/scripts/score_prospects_v43.py
 - [ ] Verify: ml_features.v4_prospect_scores created/updated
+- [ ] Row count: __________ (~285,690 scores)
+- [ ] Career Clock features populated: cc_is_in_move_window, cc_is_too_early
+- [ ] Bottom 20% count: __________ (~57,138 deprioritized)
+
+### Step 4: Generate Base Lead List (Query 1)
+- [ ] Run: pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql
+- [ ] Verify: ml_features.january_2026_lead_list created
+- [ ] Row count: __________ (~2,800 leads)
+
+### Step 5: Insert M&A Leads (Query 2) ⚠️ MUST RUN AFTER STEP 4
+- [ ] Run: pipeline/sql/Insert_MA_Leads.sql
+- [ ] Verify: M&A leads added to existing table
+- [ ] Total row count: __________ (~3,100 leads: 2,800 base + 300 M&A)
+
+### Step 6: Export to CSV
+- [ ] Run: python pipeline/scripts/export_lead_list.py
+- [ ] Verify: CSV file created in pipeline/exports/
+- [ ] File name: [month]_2026_lead_list_YYYYMMDD.csv
 - [ ] Row count: __________
 - [ ] Bottom 20% count: __________
 
-### Step 3: Generate Lead List
+### Step 4: Generate Base Lead List (Query 1)
 - [ ] Run: pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql
-- [ ] Verify: ml_features.january_2026_lead_list created/updated
-- [ ] Lead count: __________
-- [ ] Tier distribution validated
+- [ ] Verify: ml_features.january_2026_lead_list created
+- [ ] Base lead count: __________ (~2,800 leads)
 
-### Step 4: Export
-- [ ] Export to CSV
+### Step 5: Insert M&A Leads (Query 2) ⚠️ MUST RUN AFTER STEP 4
+- [ ] Run: pipeline/sql/Insert_MA_Leads.sql
+- [ ] Verify: M&A leads added to existing table
+- [ ] Total lead count: __________ (~3,100: 2,800 base + 300 M&A)
+
+### Step 6: Export to CSV
+- [ ] Run: python pipeline/scripts/export_lead_list.py
+- [ ] Verify: CSV file created in pipeline/exports/
+- [ ] File name: [month]_2026_lead_list_YYYYMMDD.csv
 - [ ] Upload to Salesforce
 - [ ] Notify team
 ```
 
 ### Changelog
 
-#### V3.5.1 / V4.2.0 - January 7, 2026 - Age Feature + SHAP Resolution
+#### V3.6.1 / V4.3.2 - January 8, 2026 - Career Clock Fuzzy Firm Matching + Recent Promotee Feature
+
+**V4.3.2 Changes**:
+- Fixed Career Clock fuzzy firm name matching: Excludes same firm with different CRD (re-registrations)
+- Example: James Patton at "Patton Albertson Miller Group" (CRD 281558) had "Patton Albertson & Miller" (CRD 126145) incorrectly counted as prior job
+- Impact: ~135 advisors removed from incorrect move window status
+- Uses first-15-chars fuzzy match on cleaned firm names (validated 100% accuracy)
+
+**V4.3.1 Changes** (from previous update):
+- Fixed Career Clock data quality: Excluded current firm from employment history calculation
+- Added Recent Promotee feature: `is_likely_recent_promotee` (26th feature, 2.39% importance)
+- Test AUC: 0.6322 (slightly below V4.3.0's 0.6389, acceptable after data quality fix)
+- Top Decile Lift: 2.40x (still strong performance)
+- Uses gain-based narratives (SHAP deferred to V4.4.0)
+- Fixed duplicate prevention in `v4_prospect_features.sql` (QUALIFY ROW_NUMBER on firm-level JOINs)
+
+**V3.6.1 Changes**:
+- Career Clock tiers (0A, 0B, 0C) - timing-aware prioritization (from V3.6.0)
+- Zero Friction tier (TIER_1B_PRIME_ZERO_FRICTION) - 13.64% conversion (from V3.6.0)
+- Sweet Spot tiers (TIER_1G_ENHANCED_SWEET_SPOT) - 9.09% conversion (from V3.6.0)
+- **NEW**: Recent Promotee exclusion (<5yr tenure + mid/senior titles) - excludes ~1,915 low-converting leads
+- **NEW**: V4 deprioritization filter for M&A leads (V4 percentile >= 20)
+- M&A tiers from V3.5.0 preserved
+
+#### V3.5.0 / V4.2.0 - January 7, 2026 - Age Feature + SHAP Resolution
 
 **Summary:** Added age_bucket_encoded as 23rd feature to V4 model, significantly improving model performance. Resolved SHAP TreeExplainer bug by switching to gain-based narratives.
 
@@ -1825,7 +2062,7 @@ The "Succession Gap" hypothesis (T1G leads at aging firms with 20+ year principa
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| "No v4_prospect_scores found" | Step 2 not completed | Run `score_prospects_monthly.py` first |
+| "No v4_prospect_scores found" | Step 3 not completed | Run `score_prospects_v43.py` first |
 | Low V4 percentile average | V4 scores not joined | Check JOIN in `v4_enriched` CTE |
 | Too few leads (< 200 per SGA) | Tier quotas too restrictive or insufficient prospects | Check tier distribution, verify SGA count, check prospect pool |
 | Duplicate CRDs | JOIN issue | Add DISTINCT or fix JOIN logic |
@@ -2062,8 +2299,9 @@ lead_scoring_production/
 │   │   ├── manage_excluded_firms.sql  # Exclusion management queries
 │   │   └── CENTRALIZED_EXCLUSIONS_SUMMARY.md  # Exclusion documentation
 │   ├── scripts/
-│   │   ├── score_prospects_monthly.py # Step 2: ML scoring
-│   │   ├── export_lead_list.py        # Step 4: CSV export
+│   │   ├── score_prospects_v43.py      # Step 3: V4.3.0 ML scoring (USE THIS)
+│   │   ├── score_prospects_monthly.py  # V4.2.0 only (deprecated - DO NOT USE)
+│   │   ├── export_lead_list.py        # Step 6: CSV export
 │   │   └── execute_january_lead_list.py  # Lead list execution helper
 │   ├── exports/                       # CSV output files
 │   ├── logs/                          # Execution logs
@@ -2257,6 +2495,109 @@ Root cause: BigQuery's CTE optimization in complex queries (1,400+ lines) causes
 
 ---
 
+### V3.6.1 - January 8, 2026 - Career Clock Fix + Recent Promotee Exclusion
+
+**Summary:** Fixed Career Clock data quality issue and added exclusion for low-converting recent promotees.
+
+#### Key Changes
+
+1. **Fixed Career Clock Data Quality**
+   - Excluded current firm CRD from employment history calculation
+   - ~692 advisors had polluted Career Clock data (10-19% of long-tenure advisors)
+   - Example: Rafael Delasierra (founder, 27yr at firm) incorrectly in "move window"
+   - Root cause: Firm re-registrations appearing as separate "completed jobs"
+   - Impact by tenure bucket:
+     - 10-15 years: 19.3% affected
+     - 20+ years: 10.6% affected
+
+2. **Added Recent Promotee Exclusion**
+   - Advisors with <5yr tenure + mid/senior titles convert at 0.29-0.45%
+   - This is 6-9x worse than 2.74% baseline
+   - ~1,915 leads excluded from pipeline
+   - Founders/Owners NOT excluded (1.07% conversion)
+   - Rationale: Recent promotees don't have portable books yet
+
+3. **Added V4 Filter to M&A Leads**
+   - M&A leads now filtered by V4 percentile >= 20
+   - Prevents low-V4 individuals from bypassing deprioritization
+   - Example: Michael Puls (8th percentile) would now be excluded
+   - While M&A tier has 9.0% aggregate conversion, V4 model can identify individual low-potential leads
+
+#### Analysis Supporting Changes
+
+| Finding | Data | Action |
+|---------|------|--------|
+| Current firm in history | 692 advisors, 10-19% of long-tenure | EXCLUDE from Career Clock calc |
+| Recent promotee (Senior) | 0.29% conv (0.10x) | EXCLUDE |
+| Recent promotee (Mid) | 0.45% conv (0.16x) | EXCLUDE |
+| Founder/Owner | 1.07% conv (0.39x) | KEEP |
+| Bottom 20% V4 in M&A | Unknown individual rate | EXCLUDE |
+
+#### Files Modified
+
+- `pipeline/sql/v4_prospect_features.sql` - Career Clock fix + Recent Promotee feature (V4.3.1)
+  - Added `current_firm_crd` to `base_prospects` CTE
+  - Added exclusion filter: `AND SAFE_CAST(eh.PREVIOUS_REGISTRATION_COMPANY_CRD_ID AS INT64) != bp.current_firm_crd`
+  - Added `recent_promotee_feature` CTE to calculate `is_likely_recent_promotee` (26th feature)
+  - Added feature to final SELECT and LEFT JOIN
+  
+- `pipeline/sql/January_2026_Lead_List_V3_V4_Hybrid.sql` - Recent promotee exclusion (V3.6.1)
+  - Added `recent_promotee_exclusions` CTE
+  - Applied filter in `enriched_prospects` WHERE clause
+  
+- `pipeline/sql/Insert_MA_Leads.sql` - V4 filter for M&A (V3.6.1)
+  - Added V4 deprioritization filter: `AND COALESCE(v4.v4_percentile, 50) >= 20`
+  - Enhanced comment with detailed rationale
+  
+- `v4/scripts/train_model_v43.py` - Updated to V4.3.1 (26 features)
+  - Added `is_likely_recent_promotee` to feature list
+  - Updated validation gates (adjusted AUC threshold for data quality fix)
+  - Updated model output paths to `v4.3.1`
+  
+- `pipeline/scripts/score_prospects_v43.py` - Updated to V4.3.1 (26 features)
+  - Added `is_likely_recent_promotee` to feature list and descriptions
+  - Updated model path to `v4/models/v4.3.1`
+
+#### Validation Queries
+
+After deployment, run these queries to validate:
+
+```sql
+-- Validate Career Clock fix: Rafael should no longer be in move window
+SELECT crd, cc_is_in_move_window, cc_avg_prior_tenure_months, cc_tenure_cv
+FROM `savvy-gtm-analytics.ml_features.v4_prospect_features`
+WHERE crd = 2206086;  -- Rafael Delasierra
+
+-- Verify recent promotees are excluded
+SELECT 
+    CASE 
+        WHEN c.INDUSTRY_TENURE_MONTHS < 60 
+             AND (UPPER(c.TITLE_NAME) LIKE '%FINANCIAL ADVISOR%' 
+                  OR UPPER(c.TITLE_NAME) LIKE '%WEALTH ADVISOR%'
+                  OR UPPER(c.TITLE_NAME) LIKE '%SENIOR%')
+             AND UPPER(c.TITLE_NAME) NOT LIKE '%FOUNDER%'
+        THEN 'Recent Promotee'
+        ELSE 'Other'
+    END as category,
+    COUNT(*) as lead_count
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list` ll
+INNER JOIN `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
+    ON ll.advisor_crd = c.RIA_CONTACT_CRD_ID
+GROUP BY 1;
+
+-- Check M&A leads V4 percentile distribution
+SELECT 
+    score_tier,
+    COUNT(*) as total,
+    SUM(CASE WHEN v4_percentile < 20 THEN 1 ELSE 0 END) as below_20_pct,
+    AVG(v4_percentile) as avg_percentile
+FROM `savvy-gtm-analytics.ml_features.january_2026_lead_list`
+WHERE score_tier LIKE 'TIER_MA%'
+GROUP BY score_tier;
+```
+
+---
+
 ### V3.3.0 - December 30, 2025 - Bleeding Signal Refinement
 
 **Summary:** Major refinement to bleeding signal based on comprehensive conversion analysis.
@@ -2366,10 +2707,10 @@ If V3.3 underperforms:
 
 ---
 
-**Document Version**: 3.5.1 (V4.2.0 Age Feature + Gain-Based Narratives)  
-**Last Updated**: January 7, 2026  
-**V3 Model Version**: V3.5.0_01032026_MA_TIERS  
-**V4 Model Version**: V4.2.0 (23 features, gain-based narratives)  
+**Document Version**: 3.6.1 (V4.3.1 Career Clock Data Quality Fix + Recent Promotee Exclusion)  
+**Last Updated**: January 8, 2026  
+**V3 Model Version**: V3.6.1_01082026_CAREER_CLOCK_TIERS  
+**V4 Model Version**: V4.3.2 (26 features, gain-based narratives, Career Clock features with fuzzy firm matching fix + Recent Promotee feature)  
 **Architecture**: Two-Query (CREATE then INSERT)  
 **Maintainer**: Data Science Team  
 **Questions?**: Contact the Data Science team

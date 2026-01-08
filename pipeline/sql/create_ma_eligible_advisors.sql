@@ -62,7 +62,7 @@ ma_advisors AS (
         ) THEN 1 ELSE 0 END as is_senior_title,
         
         -- Mid-career flag (10-20 years = 120-240 months)
-        CASE WHEN COALESCE(at.industry_tenure_months, 0) BETWEEN 120 AND 240 
+        CASE WHEN COALESCE(adv_tenure.industry_tenure_months, 0) BETWEEN 120 AND 240 
         THEN 1 ELSE 0 END as is_mid_career
         
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c

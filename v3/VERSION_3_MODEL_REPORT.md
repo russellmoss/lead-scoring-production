@@ -1,10 +1,10 @@
 # Version 3 Lead Scoring Model - Comprehensive Technical Report
 
-**Model Version:** V3.5.1_01072026_AGE_EXCLUSION  
+**Model Version:** V3.6.0_01082026_CAREER_CLOCK_TIERS  
 **Original Development Date:** December 21, 2025  
-**Last Updated:** January 7, 2026 (V3.5.1: Age exclusion threshold updated from 65+ to 70+)  
+**Last Updated:** January 8, 2026 (V3.6.0: Career Clock tiers with updated conversion rates from analysis)  
 **Base Directory:** `Version-3/`  
-**Status:** ✅ Production Ready (V3.5.1 with optimized age exclusion threshold)
+**Status:** ✅ Production Ready (V3.6.0 with Career Clock timing-aware prioritization)
 
 ---
 
@@ -966,7 +966,7 @@ Creates `lead_scoring_splits` table with TRAIN/TEST/GAP labels
 - Checks feature distributions
 
 #### Phase 4.1: Tier Construction
-Creates `lead_scores_v3` table with tier assignments
+Creates `lead_scores_v3_6` table with tier assignments (V3.6.0)
 
 #### Phase 5.1: Tier Validation & Performance Analysis
 Validates tier performance on training and test data
@@ -2047,9 +2047,9 @@ Version-3/
 ### Key Files by Purpose
 
 #### Model Definition
-- **`sql/phase_4_v3_tiered_scoring.sql`** ⭐ - **Main tier logic** (V3.2 - currently deployed)
-  - Creates `lead_scores_v3` table in BigQuery
-  - Implements 7 priority tiers (1A, 1B, 1C, 2A, 2B, 3, 4) + STANDARD
+- **`sql/phase_4_v3_tiered_scoring.sql`** ⭐ - **Main tier logic** (V3.6.0 - currently deployed)
+  - Creates `lead_scores_v3_6` table in BigQuery
+  - Implements Career Clock tiers (0A, 0B, 0C) + 7 priority tiers (1A, 1B, 1C, 2A, 2B, 3, 4) + STANDARD + NURTURE
   - Includes all tier metadata (display names, expected rates, explanations)
 
 #### Feature Engineering
@@ -2522,9 +2522,9 @@ END as score_tier
 ---
 
 **Report Generated:** December 2025  
-**Last Updated:** December 22, 2025  
-**Model Version:** V3.2_12212025 (Consolidated 5-tier structure)  
-**Status:** ✅ Production Ready, V3.2_12212025 Deployed and Validated, January 2026 Lead List Generated
+**Last Updated:** January 8, 2026  
+**Model Version:** V3.6.0_01082026_CAREER_CLOCK_TIERS  
+**Status:** ✅ Production Ready, V3.6.0 Deployed with Career Clock timing-aware prioritization
 
 ---
 
@@ -2537,4 +2537,5 @@ END as score_tier
 | 1.2 | 2025-12-22 | Added V3.2_12212025 consolidation details (7 tiers → 5 tiers), January 2026 lead list generation process and deployment information |
 | 1.3 | 2026-01-03 | Added V3.5.0 M&A Active Tiers section, documented two-query architecture, updated tier hierarchy |
 | 1.4 | 2026-01-07 | Added V3.5.1 Age Exclusion Analysis section, updated exclusion threshold from 65+ to 70+ |
+| 1.5 | 2026-01-08 | Added V3.6.0 Career Clock Tiers section, updated conversion rates from analysis, documented timing-aware prioritization |
 

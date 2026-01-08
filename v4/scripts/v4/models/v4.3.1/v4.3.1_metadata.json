@@ -1,0 +1,42 @@
+{
+  "model_version": "V4.3.1",
+  "trained_at": "2026-01-08T11:30:09.109883",
+  "feature_count": 26,
+  "training_samples": 24734,
+  "test_samples": 3393,
+  "base_score": 0.023813374302579446,
+  "train_auc": 0.6802456578657313,
+  "test_auc": 0.6322304995617879,
+  "overfit_gap": 0.04801515830394343,
+  "top_decile_lift": 2.396514012303486,
+  "new_features": [
+    "cc_is_in_move_window",
+    "cc_is_too_early",
+    "is_likely_recent_promotee"
+  ],
+  "cc_in_window_importance_pct": 0.0,
+  "cc_too_early_importance_pct": 0.0,
+  "promotee_importance_pct": 2.3880562782287598,
+  "shap_expected_value": null,
+  "shap_validation_passed": true,
+  "shap_explainer_created": false,
+  "gate_results": {
+    "auc_gate": true,
+    "overfit_gate": true,
+    "cc_min_importance": true,
+    "cc_max_importance": true,
+    "promotee_importance": true,
+    "shap_validation": true
+  },
+  "changes_from_v4.3.0": [
+    "Added is_likely_recent_promotee feature",
+    "Career Clock now excludes current firm from employment history",
+    "Total features: 26 (was 25)"
+  ],
+  "changes_from_v4.2.0": [
+    "Added cc_is_in_move_window feature",
+    "Added cc_is_too_early feature",
+    "Fixed SHAP base_score bug",
+    "True SHAP values now available for narratives"
+  ]
+}

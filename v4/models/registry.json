@@ -1,9 +1,72 @@
 {
-  "current_production": "v4.2.0",
+  "current_production": "v4.3.0",
   "models": {
+    "v4.3.0": {
+      "version": "v4.3.0",
+      "status": "production",
+      "training_date": "2026-01-08",
+      "deployed_date": "2026-01-08",
+      "model_type": "XGBoost",
+      "features": 25,
+      "new_features": [
+        "cc_is_in_move_window",
+        "cc_is_too_early"
+      ],
+      "hyperparameters": {
+        "max_depth": 2,
+        "min_child_weight": 30,
+        "reg_alpha": 1.0,
+        "reg_lambda": 5.0,
+        "gamma": 0.3,
+        "learning_rate": 0.01,
+        "n_estimators": 2000,
+        "early_stopping_rounds": 150,
+        "subsample": 0.6,
+        "colsample_bytree": 0.6,
+        "base_score": 0.023813,
+        "scale_pos_weight": 41.0
+      },
+      "metrics": {
+        "test_auc_roc": 0.6389,
+        "test_auc_pr": null,
+        "top_decile_lift": 2.80,
+        "train_test_auc_gap": 0.0353,
+        "overfitting_gap": 0.0353
+      },
+      "comparison": {
+        "vs_v4.2.0": {
+          "test_auc_change": "+0.58%",
+          "top_decile_lift_change": "+22.8%",
+          "overfitting_gap_change": "+33.7%",
+          "summary": "Improved AUC (+0.58%), significantly improved top decile lift (+22.8%), overfitting gap within acceptable range"
+        }
+      },
+      "deployment_strategy": "hybrid",
+      "use_case": "deprioritization_filter",
+      "deprioritization_threshold": 20,
+      "career_clock_features": {
+        "cc_is_in_move_window": {
+          "enabled": true,
+          "purpose": "Career Clock timing signal - advisor in optimal move window",
+          "importance_pct": 2.02,
+          "validation": "Independent from age (correlation = 0.035), 2.43x lift within 35-49 age group"
+        },
+        "cc_is_too_early": {
+          "enabled": true,
+          "purpose": "Career Clock deprioritization signal - advisor too early in cycle",
+          "importance_pct": 0.0,
+          "validation": "Independent from age (correlation = 0.003), provides deprioritization signal"
+        }
+      },
+      "shap_status": "gain-based (XGBoost/SHAP compatibility issue)",
+      "shap_note": "SHAP base_score parsing bug deferred to V4.4.0. Using gain-based narratives (same as V4.2.0) for production deployment.",
+      "notes": "V4.3.0 adds Career Clock features (cc_is_in_move_window, cc_is_too_early) based on career_clock_results.md. Improved AUC (+0.58% vs V4.2.0), significantly improved top decile lift (+22.8%). All validation gates passed. SHAP fix deferred to V4.4.0."
+    },
     "v4.2.0": {
       "version": "v4.2.0",
-      "status": "production",
+      "status": "deprecated",
+      "deprecated_date": "2026-01-08",
+      "deprecated_reason": "Superseded by V4.3.0 with Career Clock features (+0.58% AUC, +22.8% lift improvement)",
       "training_date": "2026-01-07",
       "deployed_date": "2026-01-07",
       "model_type": "XGBoost",

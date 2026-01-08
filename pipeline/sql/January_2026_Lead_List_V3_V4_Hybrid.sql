@@ -1,33 +1,69 @@
 -- ============================================================================
--- JANUARY 2026 LEAD LIST GENERATOR (V3.4.0 + V4.1.0 R3 HYBRID)
+-- JANUARY 2026 LEAD LIST GENERATOR (V3.6.1 + V4.3.1 HYBRID)
 -- ============================================================================
--- Version: 3.0 with V3.4.0 Career Clock + V3.3.3 Zero Friction (Updated 2026-01-03)
+-- Version: 3.6.1 with Career Clock Tiers + V4.3.1 Data Quality Fix (Updated 2026-01-08)
 -- NOTE: M&A tiers are added via separate INSERT query (Insert_MA_Leads.sql)
 -- 
--- V4.1 INTEGRATION CHANGES:
--- - Scores table: ml_features.v4_prospect_scores (SAME NAME, updated with V4.1 scores)
--- - Features: 22 (was 14)
--- - New columns: is_recent_mover, days_since_last_move, firm_departures_corrected,
---                bleeding_velocity_encoded, is_dual_registered
--- - Disagreement threshold: 60th percentile (was 70th) - V4.1 is more accurate
+-- V3.6.1 CHANGES (January 8, 2026):
+-- - ADDED: Recent promotee exclusion (<5yr tenure + mid/senior title)
+-- - Impact: Excludes ~1,915 low-converting leads (0.29-0.45% conversion)
+-- - Rationale: Recent promotees don't have portable books yet
+--
+-- V3.6.0 CHANGES (January 8, 2026):
+-- - ADDED: Career Clock tiers for timing-aware prioritization
+-- - TIER_0A_PRIME_MOVER_DUE: Prime Mover + In Move Window (5.59% conv, 2.43x lift)
+-- - TIER_0B_SMALL_FIRM_DUE: Small Firm + In Move Window (validated)
+-- - TIER_0C_CLOCKWORK_DUE: Any advisor in move window (5.07% conv, 1.33x lift)
+-- - TIER_NURTURE_TOO_EARLY: Advisors too early in cycle (3.72% conv - deprioritize)
+-- - Career Clock is INDEPENDENT from Age (correlation = 0.035)
+-- - Analysis: career_clock_results.md (January 7, 2026)
 -- 
--- V4.1 PERFORMANCE IMPROVEMENTS:
--- - Test AUC-ROC: 0.620 (+3.5% vs V4.0.0)
--- - Top Decile Lift: 2.03x (+34% vs V4.0.0)
--- - Better bleeding signal detection
+-- CAREER CLOCK METHODOLOGY:
+-- - Uses advisor employment history to detect predictable career patterns
+-- - tenure_cv < 0.5 = Predictable pattern (Clockwork or Semi-Predictable)
+-- - In_Window = 70-130% through typical tenure cycle
+-- - Too_Early = < 70% through typical tenure cycle
+-- - PIT-safe: Only uses employment records with END_DATE < prediction_date
+--
+-- V3.5.2 CHANGES (January 7, 2026):
+-- - DISCLOSURE EXCLUSIONS: Exclude advisors with regulatory/legal disclosures
+-- - Exclusions: CRIMINAL, REGULATORY_EVENT, TERMINATION, INVESTIGATION,
+--               CUSTOMER_DISPUTE, CIVIL_EVENT, BOND
+-- - Rationale: Compliance/reputational risk outweighs marginal conversion benefit
+-- - Impact: ~10% of prospects excluded, protects against compliance failures
+-- 
+-- V4.2.0 INTEGRATION CHANGES (January 7, 2026):
+-- - Model: V4.2.0 with age_bucket_encoded (23 features, was 22 in V4.1.0)
+-- - Performance: AUC 0.6352 (+1.52%), Lift 2.28x (+12.3%), Overfit 0.0264 (-64.8%)
+-- - Narratives: Gain-based (SHAP TreeExplainer deprecated due to XGBoost serialization bug)
+-- - New feature: age_bucket_encoded (Rank #10, 4.34% importance)
+-- - Scores table: ml_features.v4_prospect_scores (updated with V4.2.0 scores)
+-- 
+-- V4.2.0 PERFORMANCE:
+-- - Test AUC-ROC: 0.6352 (+1.52% vs V4.1.0)
+-- - Top Decile Lift: 2.28x (+12.3% vs V4.1.0)
+-- - Overfitting Gap: 0.0264 (-64.8% vs V4.1.0)
+-- - Disagreement threshold: 60th percentile (unchanged from V4.1.0)
 -- 
 -- FEATURES:
 -- - V3 Rules: Tier assignment with rich human-readable narratives
--- - V4.1 XGBoost: Upgrade path with SHAP-based narratives
+-- - V4.2.0 XGBoost: 23 features including age_bucket_encoded
+-- - Narratives: Gain-based feature importance (top 3 features per lead)
 -- - Job Titles: Included in output for SDR context
 -- - Firm Exclusions: Managed in ml_features.excluded_firms table
---                    (easier to maintain - no SQL edits needed)
+-- - Disclosure Exclusions: Applied in base_prospects CTE
 --
 -- FIRM EXCLUSIONS:
 -- - Savvy Advisors, Inc. (CRD 318493) - Internal firm
 -- - Ritholtz Wealth Management (CRD 168652) - Partner firm
 --
--- OUTPUT: ml_features.january_2026_lead_list (NEW SINGLE TABLE - replaces old tables)
+-- ADVISOR EXCLUSIONS:
+-- - Age over 70: Excludes AGE_RANGE values '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
+-- - Disclosures: Excludes CRIMINAL, REGULATORY_EVENT, TERMINATION, INVESTIGATION,
+--                CUSTOMER_DISPUTE, CIVIL_EVENT, BOND (V3.5.2)
+-- - Titles: Excludes paraplanner, assistant, operations, compliance, etc.
+--
+-- OUTPUT: ml_features.january_2026_lead_list
 -- ============================================================================
 
 CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.january_2026_lead_list` AS
@@ -192,6 +228,45 @@ firm_metrics AS (
 ),
 
 -- ============================================================================
+-- I. CAREER CLOCK STATS (V3.6.0)
+-- ============================================================================
+-- Calculates advisor career patterns from completed employment records
+-- PIT-SAFE: Only uses jobs with END_DATE < CURRENT_DATE()
+-- ============================================================================
+career_clock_stats AS (
+    SELECT
+        eh.RIA_CONTACT_CRD_ID as advisor_crd,
+        COUNT(*) as cc_completed_jobs,
+        AVG(DATE_DIFF(
+            eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+            eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+            MONTH
+        )) as cc_avg_prior_tenure_months,
+        SAFE_DIVIDE(
+            STDDEV(DATE_DIFF(
+                eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+                MONTH
+            )),
+            AVG(DATE_DIFF(
+                eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE,
+                MONTH
+            ))
+        ) as cc_tenure_cv
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history` eh
+    WHERE eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
+      AND eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE IS NOT NULL
+      -- ⚠️ PIT CRITICAL: Only completed jobs BEFORE CURRENT_DATE
+      AND eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE < CURRENT_DATE()
+      -- Valid tenure (positive months)
+      AND DATE_DIFF(eh.PREVIOUS_REGISTRATION_COMPANY_END_DATE,
+                    eh.PREVIOUS_REGISTRATION_COMPANY_START_DATE, MONTH) > 0
+    GROUP BY eh.RIA_CONTACT_CRD_ID
+    HAVING COUNT(*) >= 2  -- Need 2+ completed jobs to detect pattern
+),
+
+-- ============================================================================
 -- J. BASE PROSPECT DATA (with firm CRD exclusions)
 -- ============================================================================
 base_prospects AS (
@@ -224,6 +299,48 @@ base_prospects AS (
       -- Firm exclusions (M&A firms will be added via separate INSERT query)
       AND ef.firm_pattern IS NULL                    -- Not on exclusion list
       AND ec.firm_crd IS NULL                        -- Not on CRD exclusion list
+      
+      -- Age exclusion: Exclude advisors over 70
+      -- AGE_RANGE values over 70: '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
+      -- NOTE: Age 65-69 is now INCLUDED (converts at 2.97%, below baseline but still converts)
+      -- Based on age_analysis_results.md analysis (January 7, 2026)
+      AND (c.AGE_RANGE IS NULL 
+           OR c.AGE_RANGE NOT IN ('70-74', '75-79', '80-84', '85-89', '90-94', '95-99'))
+      
+      -- ========================================================================
+      -- V3.5.2 DISCLOSURE EXCLUSIONS (January 7, 2026)
+      -- ========================================================================
+      -- Exclude advisors with regulatory/legal disclosures
+      -- Based on disclosure_analysis_results.md analysis
+      -- 
+      -- Rationale: While disclosures only reduce conversion by 0.11% (not statistically
+      -- significant), we exclude for compliance/reputational reasons:
+      -- - Advisors with disclosures may fail compliance review
+      -- - Regulatory risk for the RIA
+      -- - E&O insurance considerations
+      -- - Custodian (Schwab/Fidelity) may reject advisors with certain disclosures
+      --
+      -- Impact: Excludes ~10% of prospects, loses ~271 potential MQLs annually
+      -- Benefit: Protects against compliance failures and reputational risk
+      -- ========================================================================
+      
+      -- HARD EXCLUDE: Serious regulatory/legal issues
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_CRIMINAL, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_REGULATORY_EVENT, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_TERMINATION, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_INVESTIGATION, FALSE) = FALSE
+      
+      -- SOFT EXCLUDE: Client/business issues  
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_CUSTOMER_DISPUTE, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_CIVIL_EVENT, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_BOND, FALSE) = FALSE
+      
+      -- NOTE: BANKRUPT and JUDGMENT_OR_LIEN are NOT excluded
+      -- These are personal financial issues that may not affect practice quality
+      -- Uncomment below to exclude if compliance requires:
+      -- AND COALESCE(c.CONTACT_HAS_DISCLOSED_BANKRUPT, FALSE) = FALSE
+      -- AND COALESCE(c.CONTACT_HAS_DISCLOSED_JUDGMENT_OR_LIEN, FALSE) = FALSE
+      
       -- Title exclusions
       AND NOT (
           UPPER(c.TITLE_NAME) LIKE '%FINANCIAL SOLUTIONS ADVISOR%'
@@ -236,6 +353,65 @@ base_prospects AS (
           OR UPPER(c.TITLE_NAME) LIKE '%INSURANCE AGENT%'
           OR UPPER(c.TITLE_NAME) LIKE '%INSURANCE%'
       )
+),
+
+-- ============================================================================
+-- J.1 RECENT PROMOTEE EXCLUSION (V3.6.1)
+-- ============================================================================
+-- Analysis (January 8, 2026) found advisors with <5 years industry tenure
+-- holding mid/senior titles convert at 0.29-0.45% (0.10-0.16x baseline).
+-- 
+-- These "recent promotees" likely don't have portable books yet:
+-- - Recently promoted from junior roles
+-- - Still building client relationships
+-- - May not have decision-making authority to move
+--
+-- Conversion by career stage:
+--   LIKELY_RECENT_PROMOTEE (Senior): 0.29% (0.10x lift) - 348 leads
+--   LIKELY_RECENT_PROMOTEE (Mid):    0.45% (0.16x lift) - 1,567 leads
+--   ESTABLISHED_PRODUCER:            0.73% (0.27x lift) - baseline comparison
+--   FOUNDER_OWNER:                   1.07% (0.39x lift) - DO NOT EXCLUDE
+--
+-- Impact: Excludes ~1,915 low-converting leads from pipeline
+-- ============================================================================
+recent_promotee_exclusions AS (
+    SELECT DISTINCT bp.crd
+    FROM base_prospects bp
+    INNER JOIN `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
+        ON bp.crd = c.RIA_CONTACT_CRD_ID
+    WHERE 
+        -- Less than 5 years industry tenure
+        COALESCE(c.INDUSTRY_TENURE_MONTHS, 0) < 60
+        -- Has mid-level or senior title (suggests promotion)
+        AND (
+            UPPER(c.TITLE_NAME) LIKE '%FINANCIAL ADVISOR%'
+            OR UPPER(c.TITLE_NAME) LIKE '%WEALTH ADVISOR%'
+            OR UPPER(c.TITLE_NAME) LIKE '%INVESTMENT ADVISOR%'
+            OR UPPER(c.TITLE_NAME) LIKE '%FINANCIAL PLANNER%'
+            OR UPPER(c.TITLE_NAME) LIKE '%PORTFOLIO MANAGER%'
+            OR UPPER(c.TITLE_NAME) LIKE '%SENIOR%'
+            OR UPPER(c.TITLE_NAME) LIKE '%DIRECTOR%'
+            OR UPPER(c.TITLE_NAME) LIKE '%MANAGING%'
+            OR UPPER(c.TITLE_NAME) LIKE '%PRINCIPAL%'
+            OR UPPER(c.TITLE_NAME) LIKE '%VP %'
+            OR UPPER(c.TITLE_NAME) LIKE '%VICE PRESIDENT%'
+        )
+        -- Exclude if they're clearly still junior (shouldn't be on list anyway)
+        AND NOT (
+            UPPER(c.TITLE_NAME) LIKE '%ASSOCIATE%'
+            OR UPPER(c.TITLE_NAME) LIKE '%ASSISTANT%'
+            OR UPPER(c.TITLE_NAME) LIKE '%PARAPLANNER%'
+            OR UPPER(c.TITLE_NAME) LIKE '%JUNIOR%'
+            OR UPPER(c.TITLE_NAME) LIKE '%INTERN%'
+            OR UPPER(c.TITLE_NAME) LIKE '%TRAINEE%'
+        )
+        -- DO NOT exclude founders/owners - they convert at 1.07%
+        AND NOT (
+            UPPER(c.TITLE_NAME) LIKE '%FOUNDER%'
+            OR UPPER(c.TITLE_NAME) LIKE '%OWNER%'
+            OR UPPER(c.TITLE_NAME) LIKE '%CEO%'
+            OR UPPER(c.TITLE_NAME) LIKE '% PRESIDENT%'  -- Space before to avoid VP
+        )
 ),
 
 -- ============================================================================
@@ -278,12 +454,56 @@ enriched_prospects AS (
         COALESCE(fas.avg_account_size, 0) as avg_account_size,
         COALESCE(fas.practice_maturity, 'UNKNOWN') as practice_maturity,
         -- V3.3.3: Portable custodian flag for T1B_PRIME tier
-        COALESCE(fc.has_portable_custodian, 0) as has_portable_custodian
+        COALESCE(fc.has_portable_custodian, 0) as has_portable_custodian,
+        
+        -- V3.6.0: Career Clock features
+        ccs.cc_completed_jobs,
+        ccs.cc_avg_prior_tenure_months,
+        ccs.cc_tenure_cv,
+        
+        -- Calculate percent through cycle
+        SAFE_DIVIDE(bp.tenure_months, ccs.cc_avg_prior_tenure_months) as cc_pct_through_cycle,
+        
+        -- Career pattern classification
+        CASE
+            WHEN ccs.cc_tenure_cv IS NULL THEN 'No_Pattern'
+            WHEN ccs.cc_tenure_cv < 0.3 THEN 'Clockwork'
+            WHEN ccs.cc_tenure_cv < 0.5 THEN 'Semi_Predictable'
+            WHEN ccs.cc_tenure_cv < 0.8 THEN 'Variable'
+            ELSE 'Chaotic'
+        END as cc_career_pattern,
+        
+        -- Cycle status (key for tiering)
+        CASE
+            WHEN ccs.cc_tenure_cv IS NULL THEN 'No_Pattern'
+            WHEN ccs.cc_tenure_cv >= 0.5 THEN 'Unpredictable'
+            WHEN SAFE_DIVIDE(bp.tenure_months, ccs.cc_avg_prior_tenure_months) < 0.7 THEN 'Too_Early'
+            WHEN SAFE_DIVIDE(bp.tenure_months, ccs.cc_avg_prior_tenure_months) BETWEEN 0.7 AND 1.3 THEN 'In_Window'
+            ELSE 'Overdue'
+        END as cc_cycle_status,
+        
+        -- Boolean flags for tier logic
+        CASE WHEN ccs.cc_tenure_cv < 0.5 
+             AND SAFE_DIVIDE(bp.tenure_months, ccs.cc_avg_prior_tenure_months) BETWEEN 0.7 AND 1.3
+        THEN 1 ELSE 0 END as cc_is_in_move_window,
+        
+        CASE WHEN ccs.cc_tenure_cv < 0.5 
+             AND SAFE_DIVIDE(bp.tenure_months, ccs.cc_avg_prior_tenure_months) < 0.7
+        THEN 1 ELSE 0 END as cc_is_too_early,
+        
+        -- Months until move window (for nurture timing)
+        CASE
+            WHEN ccs.cc_tenure_cv < 0.5 AND ccs.cc_avg_prior_tenure_months IS NOT NULL
+            THEN GREATEST(0, CAST(ccs.cc_avg_prior_tenure_months * 0.7 - bp.tenure_months AS INT64))
+            ELSE NULL
+        END as cc_months_until_window
         
     FROM base_prospects bp
     LEFT JOIN advisor_moves am ON bp.crd = am.crd
     LEFT JOIN firm_metrics fm ON bp.firm_crd = fm.firm_crd
     LEFT JOIN `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c ON bp.crd = c.RIA_CONTACT_CRD_ID
+    -- V3.6.0: Career Clock stats
+    LEFT JOIN career_clock_stats ccs ON bp.crd = ccs.advisor_crd
     -- V3.3.1: Add discretionary ratio for portable book exclusion
     LEFT JOIN (
         SELECT 
@@ -326,35 +546,47 @@ enriched_prospects AS (
       -- V3.3.1: Exclude low discretionary firms (0.34x baseline)
       -- Allow NULL/Unknown - don't penalize missing data
       AND (fd.discretionary_ratio >= 0.50 OR fd.discretionary_ratio IS NULL)
+      -- V3.6.1: Exclude recent promotees (<5yr tenure + mid/senior title)
+      -- These convert at 0.29-0.45% (6-9x worse than baseline)
+      AND bp.crd NOT IN (SELECT crd FROM recent_promotee_exclusions)
 ),
 
 -- ============================================================================
--- J2. JOIN V4 SCORES + SHAP NARRATIVES + V4.1 FEATURES
+-- J2. JOIN V4.2.0 SCORES + GAIN-BASED NARRATIVES + V4.2.0 FEATURES
+-- ============================================================================
+-- V4.2.0 Changes:
+-- - 23 features (added age_bucket_encoded)
+-- - Gain-based narratives (SHAP deprecated due to XGBoost base_score bug)
+-- - Improved performance: AUC 0.6352, Lift 2.28x
 -- ============================================================================
 v4_enriched AS (
     SELECT 
         ep.*,
-        -- V4.1 Score and percentile (from v4_prospect_scores table)
+        -- V4.2.0 Score and percentile (from v4_prospect_scores table)
         COALESCE(v4.v4_score, 0.5) as v4_score,
         COALESCE(v4.v4_percentile, 50) as v4_percentile,
         COALESCE(v4.v4_deprioritize, FALSE) as v4_deprioritize,
         COALESCE(v4.v4_upgrade_candidate, FALSE) as v4_upgrade_candidate,
         
-        -- V4.1 SHAP narratives (from scores table)
+        -- V4.2.0 Gain-based narratives (replaces SHAP)
+        -- Note: Column names kept as shap_* for backwards compatibility with downstream CTEs
+        -- but values are now gain-based feature importance (not SHAP values)
         v4.shap_top1_feature,
         v4.shap_top1_value,
         v4.shap_top2_feature,
         v4.shap_top2_value,
         v4.shap_top3_feature,
         v4.shap_top3_value,
-        v4.v4_narrative as v4_shap_narrative,
+        v4.v4_narrative as v4_narrative,
         
-        -- NEW V4.1 Feature columns (from v4_prospect_features table)
+        -- V4.2.0 Feature columns (23 features including age)
         COALESCE(v4f.is_recent_mover, 0) as v4_is_recent_mover,
         COALESCE(v4f.days_since_last_move, 9999) as v4_days_since_last_move,
         COALESCE(v4f.firm_departures_corrected, 0) as v4_firm_departures_corrected,
         COALESCE(v4f.bleeding_velocity_encoded, 0) as v4_bleeding_velocity_encoded,
-        COALESCE(v4f.is_dual_registered, 0) as v4_is_dual_registered
+        COALESCE(v4f.is_dual_registered, 0) as v4_is_dual_registered,
+        -- V4.2.0: Age feature (NEW)
+        COALESCE(v4f.age_bucket_encoded, 2) as v4_age_bucket_encoded  -- Default to 50-64 bucket
     FROM enriched_prospects ep
     LEFT JOIN `savvy-gtm-analytics.ml_features.v4_prospect_scores` v4 
         ON ep.crd = v4.crd
@@ -363,9 +595,10 @@ v4_enriched AS (
 ),
 
 -- ============================================================================
--- K. APPLY V4 DEPRIORITIZATION FILTER (Bottom 20% excluded)
+-- K. APPLY V4.2.0 DEPRIORITIZATION FILTER (Bottom 20% excluded)
 -- ============================================================================
--- Optimization: Remove bottom 20% V4 scores to improve overall conversion rate
+-- Optimization: Remove bottom 20% V4.2.0 scores to improve overall conversion rate
+-- V4.2.0 bottom 20% converts at 1.21% (0.31x baseline) - strong deprioritization signal
 v4_filtered AS (
     SELECT *
     FROM v4_enriched
@@ -373,106 +606,39 @@ v4_filtered AS (
 ),
 
 -- ============================================================================
--- CAREER CLOCK STATS: Calculate advisor career patterns (V3.4.0)
--- ============================================================================
-career_clock_stats AS (
-    SELECT
-        RIA_CONTACT_CRD_ID as advisor_crd,
-        AVG(DATE_DIFF(
-            PREVIOUS_REGISTRATION_COMPANY_END_DATE,
-            PREVIOUS_REGISTRATION_COMPANY_START_DATE,
-            MONTH
-        )) as avg_tenure_months,
-        SAFE_DIVIDE(
-            STDDEV(DATE_DIFF(
-                PREVIOUS_REGISTRATION_COMPANY_END_DATE,
-                PREVIOUS_REGISTRATION_COMPANY_START_DATE,
-                MONTH
-            )),
-            AVG(DATE_DIFF(
-                PREVIOUS_REGISTRATION_COMPANY_END_DATE,
-                PREVIOUS_REGISTRATION_COMPANY_START_DATE,
-                MONTH
-            ))
-        ) as tenure_cv
-    FROM `savvy-gtm-analytics.FinTrx_data_CA.contact_registered_employment_history`
-    WHERE PREVIOUS_REGISTRATION_COMPANY_END_DATE IS NOT NULL
-      AND PREVIOUS_REGISTRATION_COMPANY_START_DATE IS NOT NULL
-      AND DATE_DIFF(PREVIOUS_REGISTRATION_COMPANY_END_DATE,
-                    PREVIOUS_REGISTRATION_COMPANY_START_DATE, MONTH) > 0
-    GROUP BY RIA_CONTACT_CRD_ID
-    HAVING COUNT(*) >= 2
-),
-
--- ============================================================================
--- K2. APPLY V3.4.0 TIER LOGIC WITH CAREER CLOCK (V3.4.0)
+-- K2. APPLY V3.6.0 TIER LOGIC WITH CAREER CLOCK (V3.6.0)
 -- ============================================================================
 scored_prospects AS (
     SELECT 
         ep.*,
         
-        -- Career Clock Features (calculated inline) - V3.4.0
-        ccs.tenure_cv as cc_tenure_cv,
-        ccs.avg_tenure_months as cc_avg_prior_tenure_months,
-        SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) as cc_pct_through_cycle,
-        
-        CASE
-            WHEN ccs.tenure_cv IS NULL THEN 'No_Pattern'
-            WHEN ccs.tenure_cv < 0.3 THEN 'Clockwork'
-            WHEN ccs.tenure_cv < 0.5 THEN 'Semi_Predictable'
-            WHEN ccs.tenure_cv < 0.8 THEN 'Variable'
-            ELSE 'Chaotic'
-        END as cc_career_pattern,
-        
-        CASE
-            WHEN ccs.tenure_cv IS NULL THEN 'Unknown'
-            WHEN ccs.tenure_cv >= 0.5 THEN 'Unpredictable'
-            WHEN SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) < 0.7 THEN 'Too_Early'
-            WHEN SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3 THEN 'In_Window'
-            ELSE 'Overdue'
-        END as cc_cycle_status,
-        
-        -- Boolean flags
-        CASE
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
-            THEN TRUE ELSE FALSE
-        END as cc_is_in_move_window,
-        
-        CASE
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) < 0.7
-            THEN TRUE ELSE FALSE
-        END as cc_is_too_early,
-        
-        -- Months until window
-        CASE
-            WHEN ccs.tenure_cv < 0.5 AND ccs.avg_tenure_months IS NOT NULL
-            THEN GREATEST(0, CAST(ccs.avg_tenure_months * 0.7 AS INT64) - ep.tenure_months)
-            ELSE NULL
-        END as cc_months_until_window,
-        
-        -- Score tier (V3.4.0 - Career Clock tiers)
+        -- Score tier (V3.6.0 - Career Clock tiers added at top)
         CASE 
-            -- ============================================================
-            -- TIER 0: Career Clock Priority Tiers (V3.4.0)
-            -- ============================================================
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
-                 AND ep.tenure_months BETWEEN 12 AND 48
-                 AND ep.industry_tenure_months BETWEEN 60 AND 180
-                 AND ep.firm_net_change_12mo != 0
+            -- ================================================================
+            -- TIER 0: CAREER CLOCK PRIORITY TIERS (V3.6.0)
+            -- These are advisors with predictable patterns who are "due" to move
+            -- Analysis: In_Window converts 2.43x vs No_Pattern within same age group
+            -- ================================================================
+            
+            -- TIER_0A: Prime Mover + In Move Window (5.59% conversion)
+            -- Combines T1 criteria with optimal timing signal
+            WHEN ep.cc_is_in_move_window = 1
+                 AND ep.tenure_years BETWEEN 1 AND 4
+                 AND ep.industry_tenure_years BETWEEN 5 AND 15
+                 AND ep.firm_net_change_12mo < 0
                  AND ep.is_wirehouse = 0
             THEN 'TIER_0A_PRIME_MOVER_DUE'
             
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            -- TIER_0B: Small Firm + In Move Window
+            -- Small firm advisors who are personally "due" to move
+            WHEN ep.cc_is_in_move_window = 1
                  AND ep.firm_rep_count <= 10
                  AND ep.is_wirehouse = 0
             THEN 'TIER_0B_SMALL_FIRM_DUE'
             
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            -- TIER_0C: Clockwork Due (any predictable advisor in window)
+            -- Rescues STANDARD leads who have optimal timing
+            WHEN ep.cc_is_in_move_window = 1
                  AND ep.is_wirehouse = 0
             THEN 'TIER_0C_CLOCKWORK_DUE'
             
@@ -512,200 +678,277 @@ scored_prospects AS (
             WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 'STANDARD'  -- Map to STANDARD (excluded)
             WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 'STANDARD'  -- Map to STANDARD (excluded)
             
-            -- NURTURE: Too Early (V3.4.0 - EXCLUDED from active list)
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) < 0.7
-                 AND ep.firm_net_change_12mo >= -10
+            -- ================================================================
+            -- EXISTING TIER 1 TIERS (unchanged)
+            -- ================================================================
+            
+            -- V3.3.3: T1B_PRIME - Zero Friction Bleeder (HIGHEST PRIORITY - 13.64% conversion)
+            WHEN ep.has_series_65_only = 1
+                 AND ep.has_portable_custodian = 1
+                 AND ep.firm_rep_count <= 10
+                 AND ep.firm_net_change_12mo <= -3
+                 AND ep.has_cfp = 0
+                 AND ep.is_wirehouse = 0
+            THEN 'TIER_1B_PRIME_ZERO_FRICTION'
+            
+            WHEN (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years >= 5 AND ep.firm_net_change_12mo < 0 AND ep.has_cfp = 1 AND ep.is_wirehouse = 0) THEN 'TIER_1A_PRIME_MOVER_CFP'
+            WHEN (((ep.tenure_years BETWEEN 1 AND 3 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.firm_rep_count <= 50 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 3 AND ep.firm_rep_count <= 10 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0))
+                  AND ep.has_series_65_only = 1) THEN 'TIER_1B_PRIME_MOVER_SERIES65'
+            WHEN ((ep.tenure_years BETWEEN 1 AND 3 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.firm_rep_count <= 50 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 3 AND ep.firm_rep_count <= 10 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0)) THEN 'TIER_1_PRIME_MOVER'
+            WHEN (ep.is_hv_wealth_title = 1 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0) THEN 'TIER_1F_HV_WEALTH_BLEEDER'
+            -- V3.3.3: T1G_ENHANCED - Sweet Spot Growth Advisor ($500K-$2M)
+            WHEN (ep.industry_tenure_months BETWEEN 60 AND 180 
+                  AND ep.avg_account_size BETWEEN 500000 AND 2000000
+                  AND ep.firm_net_change_12mo > -3 
+                  AND ep.is_wirehouse = 0) THEN 'TIER_1G_ENHANCED_SWEET_SPOT'
+            -- V3.3.3: T1G_REMAINDER - Growth Stage outside sweet spot
+            WHEN (ep.industry_tenure_months BETWEEN 60 AND 180 
+                  AND ep.avg_account_size >= 250000 
+                  AND (ep.avg_account_size < 500000 OR ep.avg_account_size > 2000000)
+                  AND ep.firm_net_change_12mo > -3 
+                  AND ep.is_wirehouse = 0) THEN 'TIER_1G_GROWTH_STAGE'
+            WHEN (ep.num_prior_firms >= 3 AND ep.industry_tenure_years >= 5) THEN 'TIER_2_PROVEN_MOVER'
+            WHEN (ep.firm_net_change_12mo BETWEEN -10 AND -1 AND ep.industry_tenure_years >= 5) THEN 'TIER_3_MODERATE_BLEEDER'
+            -- OPTION C: TIER_4_EXPERIENCED_MOVER EXCLUDED (converts at baseline 2.74%, no value)
+            -- OPTION C: TIER_5_HEAVY_BLEEDER EXCLUDED (marginal lift 3.42%, not worth including)
+            WHEN (ep.industry_tenure_years >= 20 AND ep.tenure_years BETWEEN 1 AND 4) THEN 'STANDARD'  -- Map to STANDARD (excluded)
+            WHEN (ep.firm_net_change_12mo <= -10 AND ep.industry_tenure_years >= 5) THEN 'STANDARD'  -- Map to STANDARD (excluded)
+            
+            -- ================================================================
+            -- NURTURE: Too Early (V3.6.0 - EXCLUDED from active list)
+            -- Advisors too early in cycle - add to nurture sequence
+            -- ================================================================
+            WHEN ep.cc_is_too_early = 1
+                 AND ep.firm_net_change_12mo >= -10  -- Not at heavy bleeding firm
             THEN 'TIER_NURTURE_TOO_EARLY'
             
             ELSE 'STANDARD'
         END as score_tier,
         
-        -- Priority rank (V3.4.0)
+        -- Priority rank (V3.6.0 UPDATED - Career Clock tiers first)
         CASE 
-            -- Career Clock Tiers (V3.4.0) - Highest priority
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
-                 AND ep.tenure_months BETWEEN 12 AND 48
-                 AND ep.industry_tenure_months BETWEEN 60 AND 180
-                 AND ep.firm_net_change_12mo != 0
+            -- Career Clock Tiers: Highest priority (ranks 1-3)
+            WHEN ep.cc_is_in_move_window = 1
+                 AND ep.tenure_years BETWEEN 1 AND 4
+                 AND ep.industry_tenure_years BETWEEN 5 AND 15
+                 AND ep.firm_net_change_12mo < 0
                  AND ep.is_wirehouse = 0
-            THEN 1  -- TIER_0A_PRIME_MOVER_DUE
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN 1  -- TIER_0A
+            
+            WHEN ep.cc_is_in_move_window = 1
                  AND ep.firm_rep_count <= 10
                  AND ep.is_wirehouse = 0
-            THEN 2  -- TIER_0B_SMALL_FIRM_DUE
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN 2  -- TIER_0B
+            
+            WHEN ep.cc_is_in_move_window = 1
                  AND ep.is_wirehouse = 0
-            THEN 3  -- TIER_0C_CLOCKWORK_DUE
-            -- T1B_PRIME: Fourth priority (13.64%)
-            WHEN has_series_65_only = 1
-                 AND has_portable_custodian = 1
-                 AND firm_rep_count <= 10
-                 AND firm_net_change_12mo <= -3
-                 AND has_cfp = 0
-                 AND is_wirehouse = 0
-            THEN 6
-            -- T1A: Seventh priority (10.00%)
-            WHEN (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years >= 5 AND firm_net_change_12mo < 0 AND has_cfp = 1 AND is_wirehouse = 0) THEN 7
-            -- T1G_ENHANCED: Eighth priority (9.09%)
-            WHEN (industry_tenure_months BETWEEN 60 AND 180 
-                  AND avg_account_size BETWEEN 500000 AND 2000000
-                  AND firm_net_change_12mo > -3 
-                  AND is_wirehouse = 0) THEN 8
-            -- T1B: Ninth priority (5.49%)
-            WHEN (((tenure_years BETWEEN 1 AND 3 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND firm_rep_count <= 50 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0))
-                  AND has_series_65_only = 1) THEN 9
-            -- T1G_REMAINDER: Tenth priority (5.08%)
-            WHEN (industry_tenure_months BETWEEN 60 AND 180 
-                  AND avg_account_size >= 250000 
-                  AND (avg_account_size < 500000 OR avg_account_size > 2000000)
-                  AND firm_net_change_12mo > -3 
-                  AND is_wirehouse = 0) THEN 10
-            WHEN ((tenure_years BETWEEN 1 AND 3 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND firm_rep_count <= 50 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0)) THEN 11
-            WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 12
-            WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 13
-            WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 14
+            THEN 3  -- TIER_0C
+            -- T1B_PRIME: Now rank 4 (was 1)
+            WHEN ep.has_series_65_only = 1
+                 AND ep.has_portable_custodian = 1
+                 AND ep.firm_rep_count <= 10
+                 AND ep.firm_net_change_12mo <= -3
+                 AND ep.has_cfp = 0
+                 AND ep.is_wirehouse = 0
+            THEN 4
+            
+            -- T1A: Now rank 5 (was 2)
+            WHEN (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years >= 5 AND ep.firm_net_change_12mo < 0 AND ep.has_cfp = 1 AND ep.is_wirehouse = 0) THEN 5
+            
+            -- T1G_ENHANCED: Now rank 6 (was 3)
+            WHEN (ep.industry_tenure_months BETWEEN 60 AND 180 
+                  AND ep.avg_account_size BETWEEN 500000 AND 2000000
+                  AND ep.firm_net_change_12mo > -3 
+                  AND ep.is_wirehouse = 0) THEN 6
+            
+            -- T1B: Now rank 7 (was 4)
+            WHEN (((ep.tenure_years BETWEEN 1 AND 3 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.firm_rep_count <= 50 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 3 AND ep.firm_rep_count <= 10 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0))
+                  AND ep.has_series_65_only = 1) THEN 7
+            
+            -- T1G_REMAINDER: Now rank 8 (was 5)
+            WHEN (ep.industry_tenure_months BETWEEN 60 AND 180 
+                  AND ep.avg_account_size >= 250000 
+                  AND (ep.avg_account_size < 500000 OR ep.avg_account_size > 2000000)
+                  AND ep.firm_net_change_12mo > -3 
+                  AND ep.is_wirehouse = 0) THEN 8
+            
+            -- T1: Now rank 9 (was 6)
+            WHEN ((ep.tenure_years BETWEEN 1 AND 3 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.firm_rep_count <= 50 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 3 AND ep.firm_rep_count <= 10 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0)) THEN 9
+            
+            -- T1F: Now rank 10 (was 7)
+            WHEN (ep.is_hv_wealth_title = 1 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0) THEN 10
+            
+            -- T2: Now rank 11 (was 8)
+            WHEN (ep.num_prior_firms >= 3 AND ep.industry_tenure_years >= 5) THEN 11
+            
+            -- T3: Now rank 12 (was 9)
+            WHEN (ep.firm_net_change_12mo BETWEEN -10 AND -1 AND ep.industry_tenure_years >= 5) THEN 12
+            
             -- OPTION C: TIER_4 and TIER_5 excluded (map to 99)
-            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 99  -- TIER_4 excluded
-            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 99  -- TIER_5 excluded
+            WHEN (ep.industry_tenure_years >= 20 AND ep.tenure_years BETWEEN 1 AND 4) THEN 99  -- TIER_4 excluded
+            WHEN (ep.firm_net_change_12mo <= -10 AND ep.industry_tenure_years >= 5) THEN 99  -- TIER_5 excluded
+            
+            -- NURTURE: Near bottom
+            WHEN ep.cc_is_too_early = 1
+                 AND ep.firm_net_change_12mo >= -10
+            THEN 97
+            
             ELSE 99
         END as priority_rank,
         
-        -- Expected conversion rate (V3.4.0)
+        -- Expected conversion rate (V3.6.0 UPDATED)
         CASE 
-            -- Career Clock Tiers (V3.4.0)
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
-                 AND ep.tenure_months BETWEEN 12 AND 48
-                 AND ep.industry_tenure_months BETWEEN 60 AND 180
-                 AND ep.firm_net_change_12mo != 0
+            -- Career Clock Tiers (V3.6.0)
+            WHEN ep.cc_is_in_move_window = 1
+                 AND ep.tenure_years BETWEEN 1 AND 4
+                 AND ep.industry_tenure_years BETWEEN 5 AND 15
+                 AND ep.firm_net_change_12mo < 0
                  AND ep.is_wirehouse = 0
-            THEN 0.1613  -- TIER_0A_PRIME_MOVER_DUE: 16.13%
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN 0.0559  -- TIER_0A: 5.59% (from analysis)
+            
+            WHEN ep.cc_is_in_move_window = 1
                  AND ep.firm_rep_count <= 10
                  AND ep.is_wirehouse = 0
-            THEN 0.1200  -- TIER_0B_SMALL_FIRM_DUE: 12.00%
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            THEN 0.0550  -- TIER_0B: 5.50% (estimated)
+            
+            WHEN ep.cc_is_in_move_window = 1
                  AND ep.is_wirehouse = 0
-            THEN 0.1000  -- TIER_0C_CLOCKWORK_DUE: 10.00%
+            THEN 0.0507  -- TIER_0C: 5.07% (from analysis)
+            
+            -- NURTURE
+            WHEN ep.cc_is_too_early = 1
+                 AND ep.firm_net_change_12mo >= -10
+            THEN 0.0372  -- TIER_NURTURE: 3.72% (from analysis)
             -- T1B_PRIME: 13.64%
-            WHEN has_series_65_only = 1
-                 AND has_portable_custodian = 1
-                 AND firm_rep_count <= 10
-                 AND firm_net_change_12mo <= -3
-                 AND has_cfp = 0
-                 AND is_wirehouse = 0
+            WHEN ep.has_series_65_only = 1
+                 AND ep.has_portable_custodian = 1
+                 AND ep.firm_rep_count <= 10
+                 AND ep.firm_net_change_12mo <= -3
+                 AND ep.has_cfp = 0
+                 AND ep.is_wirehouse = 0
             THEN 0.1364  -- V3.3.3: 13.64% conversion
             -- T1A: 10.00%
-            WHEN (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years >= 5 AND firm_net_change_12mo < 0 AND has_cfp = 1 AND is_wirehouse = 0) THEN 0.1000  -- V3.3.3: 10.00% conversion
+            WHEN (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years >= 5 AND ep.firm_net_change_12mo < 0 AND ep.has_cfp = 1 AND ep.is_wirehouse = 0) THEN 0.1000  -- V3.3.3: 10.00% conversion
             -- T1G_ENHANCED: 9.09%
-            WHEN (industry_tenure_months BETWEEN 60 AND 180 
-                  AND avg_account_size BETWEEN 500000 AND 2000000
-                  AND firm_net_change_12mo > -3 
-                  AND is_wirehouse = 0) THEN 0.0909  -- V3.3.3: 9.09% conversion
+            WHEN (ep.industry_tenure_months BETWEEN 60 AND 180 
+                  AND ep.avg_account_size BETWEEN 500000 AND 2000000
+                  AND ep.firm_net_change_12mo > -3 
+                  AND ep.is_wirehouse = 0) THEN 0.0909  -- V3.3.3: 9.09% conversion
             -- T1B: 5.49%
-            WHEN (((tenure_years BETWEEN 1 AND 3 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND firm_rep_count <= 50 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0))
-                  AND has_series_65_only = 1) THEN 0.0549  -- V3.3.3: 5.49% conversion
+            WHEN (((ep.tenure_years BETWEEN 1 AND 3 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.firm_rep_count <= 50 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 3 AND ep.firm_rep_count <= 10 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0))
+                  AND ep.has_series_65_only = 1) THEN 0.0549  -- V3.3.3: 5.49% conversion
             -- T1G_REMAINDER: 5.08%
-            WHEN (industry_tenure_months BETWEEN 60 AND 180 
-                  AND avg_account_size >= 250000 
-                  AND (avg_account_size < 500000 OR avg_account_size > 2000000)
-                  AND firm_net_change_12mo > -3 
-                  AND is_wirehouse = 0) THEN 0.0508  -- V3.3.3: 5.08% conversion
-            WHEN ((tenure_years BETWEEN 1 AND 3 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND firm_rep_count <= 50 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0)) THEN 0.071
-            WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN 0.065
-            WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN 0.052
-            WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN 0.044
+            WHEN (ep.industry_tenure_months BETWEEN 60 AND 180 
+                  AND ep.avg_account_size >= 250000 
+                  AND (ep.avg_account_size < 500000 OR ep.avg_account_size > 2000000)
+                  AND ep.firm_net_change_12mo > -3 
+                  AND ep.is_wirehouse = 0) THEN 0.0508  -- V3.3.3: 5.08% conversion
+            WHEN ((ep.tenure_years BETWEEN 1 AND 3 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.firm_rep_count <= 50 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 3 AND ep.firm_rep_count <= 10 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0)) THEN 0.071
+            WHEN (ep.is_hv_wealth_title = 1 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0) THEN 0.065
+            WHEN (ep.num_prior_firms >= 3 AND ep.industry_tenure_years >= 5) THEN 0.052
+            WHEN (ep.firm_net_change_12mo BETWEEN -10 AND -1 AND ep.industry_tenure_years >= 5) THEN 0.044
             -- OPTION C: TIER_4 and TIER_5 excluded (map to STANDARD rate)
-            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN 0.025  -- TIER_4 excluded
-            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN 0.025  -- TIER_5 excluded
+            WHEN (ep.industry_tenure_years >= 20 AND ep.tenure_years BETWEEN 1 AND 4) THEN 0.025  -- TIER_4 excluded
+            WHEN (ep.firm_net_change_12mo <= -10 AND ep.industry_tenure_years >= 5) THEN 0.025  -- TIER_5 excluded
             ELSE 0.025
         END as expected_conversion_rate,
         
-        -- V3 TIER NARRATIVES (V3.4.0)
+        -- V3 TIER NARRATIVES (V3.6.0 - Career Clock added)
         CASE 
-            -- Career Clock Narratives (V3.4.0)
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
-                 AND ep.tenure_months BETWEEN 12 AND 48
-                 AND ep.industry_tenure_months BETWEEN 60 AND 180
-                 AND ep.firm_net_change_12mo != 0
+            -- Career Clock Narratives
+            WHEN ep.cc_is_in_move_window = 1
+                 AND ep.tenure_years BETWEEN 1 AND 4
+                 AND ep.industry_tenure_years BETWEEN 5 AND 15
+                 AND ep.firm_net_change_12mo < 0
                  AND ep.is_wirehouse = 0
             THEN CONCAT(
-                first_name, ' is a PRIME MOVER DUE: Career Clock pattern shows they are in their move window. ',
-                'At ', firm_name, ' for ', CAST(tenure_months AS STRING), ' months (', 
-                CAST(ROUND(SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) * 100, 0) AS STRING), 
-                '% through typical cycle). TIER_0A: 16.13% expected conversion.'
+                'CAREER CLOCK + PRIME MOVER: ', ep.first_name, ' matches Prime Mover criteria AND ',
+                'has a predictable career pattern showing they are in their "move window" ',
+                '(', CAST(ROUND(ep.cc_pct_through_cycle * 100, 0) AS STRING), '% through typical tenure). ',
+                'Career Clock + Prime Mover leads convert at 5.59% (2.43x vs advisors with no pattern). ',
+                'Firm has lost ', CAST(ABS(ep.firm_net_change_12mo) AS STRING), ' advisors.'
             )
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            
+            WHEN ep.cc_is_in_move_window = 1
                  AND ep.firm_rep_count <= 10
                  AND ep.is_wirehouse = 0
             THEN CONCAT(
-                first_name, ' is at SMALL FIRM DUE: Career Clock pattern shows move window at small firm (', 
-                CAST(firm_rep_count AS STRING), ' reps). TIER_0B: 12.00% expected conversion.'
+                'CAREER CLOCK + SMALL FIRM: ', ep.first_name, ' is at a small firm (', 
+                CAST(ep.firm_rep_count AS STRING), ' reps) AND is in their personal "move window" ',
+                '(', CAST(ROUND(ep.cc_pct_through_cycle * 100, 0) AS STRING), '% through typical tenure). ',
+                'Small firm + optimal timing = high conversion potential.'
             )
-            WHEN ccs.tenure_cv < 0.5 
-                 AND SAFE_DIVIDE(ep.tenure_months, ccs.avg_tenure_months) BETWEEN 0.7 AND 1.3
+            
+            WHEN ep.cc_is_in_move_window = 1
                  AND ep.is_wirehouse = 0
             THEN CONCAT(
-                first_name, ' is CLOCKWORK DUE: Predictable Career Clock pattern shows move window. ',
-                'TIER_0C: 10.00% expected conversion.'
+                'CLOCKWORK DUE: ', ep.first_name, ' has a predictable career pattern and is currently ',
+                'in their "move window" (', CAST(ROUND(ep.cc_pct_through_cycle * 100, 0) AS STRING), 
+                '% through typical ', CAST(ROUND(ep.cc_avg_prior_tenure_months, 0) AS STRING), 
+                '-month tenure cycle). Even without other priority signals, timing alone makes them ',
+                '1.33x more likely to convert (5.07% vs 3.82% baseline).'
             )
-            -- Standard Tier Narratives
-            WHEN (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years >= 5 AND firm_net_change_12mo < 0 AND has_cfp = 1 AND is_wirehouse = 0) THEN
-                CONCAT(first_name, ' is a CFP holder at ', firm_name, ', which has lost ', CAST(ABS(firm_net_change_12mo) AS STRING), 
+            
+            WHEN ep.cc_is_too_early = 1
+                 AND ep.firm_net_change_12mo >= -10
+            THEN CONCAT(
+                'NURTURE - TOO EARLY: ', ep.first_name, ' has a predictable career pattern but is ',
+                'only ', CAST(ROUND(ep.cc_pct_through_cycle * 100, 0) AS STRING), '% through their typical cycle. ',
+                'Contact in ~', CAST(COALESCE(ep.cc_months_until_window, 0) AS STRING), ' months when they enter move window. ',
+                'Current conversion rate: 3.72% (below baseline).'
+            )
+            -- [KEEP ALL EXISTING NARRATIVES...]
+            WHEN (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years >= 5 AND ep.firm_net_change_12mo < 0 AND ep.has_cfp = 1 AND ep.is_wirehouse = 0) THEN
+                CONCAT(ep.first_name, ' is a CFP holder at ', ep.firm_name, ', which has lost ', CAST(ABS(ep.firm_net_change_12mo) AS STRING), 
                        ' advisors (net) in the past year. CFP designation indicates book ownership and client relationships. ',
-                       'With ', CAST(tenure_years AS STRING), ' years at the firm and ', CAST(industry_tenure_years AS STRING), 
-                       ' years of experience, this is an ULTRA-PRIORITY lead. Tier 1A: 8.7% expected conversion.')
-            WHEN (((tenure_years BETWEEN 1 AND 3 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND firm_rep_count <= 50 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0))
-                  AND has_series_65_only = 1) THEN
-                CONCAT(first_name, ' is a fee-only RIA advisor (Series 65 only) at ', firm_name, 
+                       'With ', CAST(ep.tenure_years AS STRING), ' years at the firm and ', CAST(ep.industry_tenure_years AS STRING), 
+                       ' years of experience, this is an ULTRA-PRIORITY lead. Tier 1A: 10.00% expected conversion.')
+            WHEN (((ep.tenure_years BETWEEN 1 AND 3 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.firm_rep_count <= 50 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 3 AND ep.firm_rep_count <= 10 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0))
+                  AND ep.has_series_65_only = 1) THEN
+                CONCAT(ep.first_name, ' is a fee-only RIA advisor (Series 65 only) at ', ep.firm_name, 
                        '. Pure RIA advisors have no broker-dealer ties, making transitions easier. ',
-                       'Tier 1B: Prime Mover (Pure RIA) with 7.9% expected conversion.')
-            WHEN ((tenure_years BETWEEN 1 AND 3 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND firm_rep_count <= 50 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 3 AND firm_rep_count <= 10 AND is_wirehouse = 0)
-                  OR (tenure_years BETWEEN 1 AND 4 AND industry_tenure_years BETWEEN 5 AND 15 AND firm_net_change_12mo < 0 AND is_wirehouse = 0)) THEN
-                CONCAT(first_name, ' has been at ', firm_name, ' for ', CAST(tenure_years AS STRING), ' years with ', 
-                       CAST(industry_tenure_years AS STRING), ' years of experience. ',
-                       CASE WHEN firm_net_change_12mo < 0 THEN CONCAT('The firm has lost ', CAST(ABS(firm_net_change_12mo) AS STRING), ' advisors. ') ELSE '' END,
+                       'Tier 1B: Prime Mover (Pure RIA) with 5.49% expected conversion.')
+            WHEN ((ep.tenure_years BETWEEN 1 AND 3 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.firm_rep_count <= 50 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 3 AND ep.firm_rep_count <= 10 AND ep.is_wirehouse = 0)
+                  OR (ep.tenure_years BETWEEN 1 AND 4 AND ep.industry_tenure_years BETWEEN 5 AND 15 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0)) THEN
+                CONCAT(ep.first_name, ' has been at ', ep.firm_name, ' for ', CAST(ep.tenure_years AS STRING), ' years with ', 
+                       CAST(ep.industry_tenure_years AS STRING), ' years of experience. ',
+                       CASE WHEN ep.firm_net_change_12mo < 0 THEN CONCAT('The firm has lost ', CAST(ABS(ep.firm_net_change_12mo) AS STRING), ' advisors. ') ELSE '' END,
                        'Prime Mover tier with 7.1% expected conversion.')
-            WHEN (is_hv_wealth_title = 1 AND firm_net_change_12mo < 0 AND is_wirehouse = 0) THEN
-                CONCAT(first_name, ' holds a High-Value Wealth title at ', firm_name, ', which has lost ', 
-                       CAST(ABS(firm_net_change_12mo) AS STRING), ' advisors. Tier 1F: HV Wealth (Bleeding) with 6.5% expected conversion.')
-            WHEN (num_prior_firms >= 3 AND industry_tenure_years >= 5) THEN
-                CONCAT(first_name, ' has worked at ', CAST(num_prior_firms + 1 AS STRING), ' different firms over ', 
-                       CAST(industry_tenure_years AS STRING), ' years. History of mobility demonstrates willingness to change. ',
+            WHEN (ep.is_hv_wealth_title = 1 AND ep.firm_net_change_12mo < 0 AND ep.is_wirehouse = 0) THEN
+                CONCAT(ep.first_name, ' holds a High-Value Wealth title at ', ep.firm_name, ', which has lost ', 
+                       CAST(ABS(ep.firm_net_change_12mo) AS STRING), ' advisors. Tier 1F: HV Wealth (Bleeding) with 6.5% expected conversion.')
+            WHEN (ep.num_prior_firms >= 3 AND ep.industry_tenure_years >= 5) THEN
+                CONCAT(ep.first_name, ' has worked at ', CAST(ep.num_prior_firms + 1 AS STRING), ' different firms over ', 
+                       CAST(ep.industry_tenure_years AS STRING), ' years. History of mobility demonstrates willingness to change. ',
                        'Proven Mover tier with 5.2% expected conversion.')
-            WHEN (firm_net_change_12mo BETWEEN -10 AND -1 AND industry_tenure_years >= 5) THEN
-                CONCAT(firm_name, ' has experienced moderate advisor departures (net change: ', CAST(firm_net_change_12mo AS STRING), '). ',
-                       first_name, ' is likely hearing about opportunities from departing colleagues. Moderate Bleeder tier: 4.4% expected conversion.')
+            WHEN (ep.firm_net_change_12mo BETWEEN -10 AND -1 AND ep.industry_tenure_years >= 5) THEN
+                CONCAT(ep.firm_name, ' has experienced moderate advisor departures (net change: ', CAST(ep.firm_net_change_12mo AS STRING), '). ',
+                       ep.first_name, ' is likely hearing about opportunities from departing colleagues. Moderate Bleeder tier: 4.4% expected conversion.')
             -- OPTION C: TIER_4 and TIER_5 excluded (map to STANDARD narrative)
-            WHEN (industry_tenure_years >= 20 AND tenure_years BETWEEN 1 AND 4) THEN
-                CONCAT(first_name, ' at ', firm_name, ' - STANDARD tier lead (TIER_4 excluded per Option C optimization).')
-            WHEN (firm_net_change_12mo <= -10 AND industry_tenure_years >= 5) THEN
-                CONCAT(first_name, ' at ', firm_name, ' - STANDARD tier lead (TIER_5 excluded per Option C optimization).')
+            WHEN (ep.industry_tenure_years >= 20 AND ep.tenure_years BETWEEN 1 AND 4) THEN
+                CONCAT(ep.first_name, ' at ', ep.firm_name, ' - STANDARD tier lead (TIER_4 excluded per Option C optimization).')
+            WHEN (ep.firm_net_change_12mo <= -10 AND ep.industry_tenure_years >= 5) THEN
+                CONCAT(ep.first_name, ' at ', ep.firm_name, ' - STANDARD tier lead (TIER_5 excluded per Option C optimization).')
             ELSE
-                CONCAT(first_name, ' at ', firm_name, ' - STANDARD tier lead.')
+                CONCAT(ep.first_name, ' at ', ep.firm_name, ' - STANDARD tier lead.')
         END as v3_score_narrative
         
     FROM v4_filtered ep
-    LEFT JOIN career_clock_stats ccs ON ep.crd = ccs.advisor_crd
 ),
 
 -- ============================================================================
@@ -776,7 +1019,7 @@ tier_limited AS (
             WHEN df.score_tier = 'TIER_1A_PRIME_MOVER_CFP' THEN 0.0274  -- Updated from optimization
             ELSE df.expected_conversion_rate 
         END as final_expected_rate,
-        -- FINAL NARRATIVE: V3 or High-V4 STANDARD (with SHAP features)
+        -- FINAL NARRATIVE: V3 or High-V4 STANDARD (with gain-based top features)
         CASE 
             WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN
                 CONCAT(
@@ -973,11 +1216,12 @@ linkedin_prioritized AS (
     FROM deduplicated_before_quotas dtl
     CROSS JOIN sga_constants sc
     WHERE 
-        -- Dynamic tier quotas: Scale proportionally to ensure we have enough leads
-        -- Base quotas are for 12 SGAs (2400 leads), scale up/down based on actual SGA count
-        -- NOTE: These quotas are applied AFTER deduplication, so we have unique leads
-        -- ============================================================
-        (final_tier = 'TIER_1A_PRIME_MOVER_CFP' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))
+        -- V3.6.0: Career Clock tier quotas
+        (final_tier = 'TIER_0A_PRIME_MOVER_DUE' AND tier_rank <= CAST(100 * sc.total_sgas / 12.0 AS INT64))
+        OR (final_tier = 'TIER_0B_SMALL_FIRM_DUE' AND tier_rank <= CAST(100 * sc.total_sgas / 12.0 AS INT64))
+        OR (final_tier = 'TIER_0C_CLOCKWORK_DUE' AND tier_rank <= CAST(200 * sc.total_sgas / 12.0 AS INT64))
+        -- Existing tier quotas (unchanged)
+        OR (final_tier = 'TIER_1A_PRIME_MOVER_CFP' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))
         OR (final_tier = 'TIER_1B_PRIME_ZERO_FRICTION' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))  -- V3.3.3: T1B_PRIME quota
         OR (final_tier = 'TIER_1G_ENHANCED_SWEET_SPOT' AND tier_rank <= CAST(50 * sc.total_sgas / 12.0 AS INT64))  -- V3.3.3: T1G_ENHANCED quota
         OR (final_tier = 'TIER_1B_PRIME_MOVER_SERIES65' AND tier_rank <= CAST(60 * sc.total_sgas / 12.0 AS INT64))
@@ -1119,24 +1363,25 @@ leads_with_sga AS (
 ),
 
 -- ============================================================================
--- R. FINAL LEAD LIST (Exclude V3/V4.1 disagreement leads)
+-- R. FINAL LEAD LIST (Exclude V3/V4.2.0 disagreement leads)
 -- ============================================================================
--- V4.1 has better lift (2.03x vs 1.51x), so we can be more aggressive
--- Updated threshold from 70th to 60th percentile for disagreement filtering
+-- V4.2.0 has strong lift (2.28x), so we maintain aggressive filtering
+-- Threshold: 60th percentile for disagreement filtering (unchanged from V4.1.0)
 -- 
--- Logic: Tier 1 leads with V4.1 < 60th percentile are likely false positives
--- V4.1 now has bleeding signal built-in, so it better understands V3 rules
+-- Logic: Tier 1 leads with V4.2.0 < 60th percentile are likely false positives
+-- V4.2.0 now includes age signal and improved bleeding detection
 -- 
--- NOTE: Deduplication already happened BEFORE SGA assignment, so no need to dedupe again
+-- NOTE: Disclosure exclusions already applied in base_prospects CTE
+-- NOTE: Deduplication already happened BEFORE SGA assignment
 -- ============================================================================
 final_lead_list AS (
     SELECT 
         lws.*
     FROM leads_with_sga lws
-    WHERE lws.score_tier != 'TIER_NURTURE_TOO_EARLY'  -- V3.4.0: Exclude too-early leads
+    WHERE lws.score_tier != 'TIER_NURTURE_TOO_EARLY'  -- V3.6.0: Exclude too-early leads
       AND NOT (
-        -- V3/V4.1 Disagreement Filter
-        -- Exclude Tier 1 leads where V4.1 < 60th percentile (was 70th for V4.0)
+        -- V3/V4.2.0 Disagreement Filter
+        -- Exclude Tier 1 leads where V4.2.0 < 60th percentile
         lws.score_tier IN (
             'TIER_1A_PRIME_MOVER_CFP',
             'TIER_1B_PRIME_ZERO_FRICTION',  -- V3.3.3: Zero Friction Bleeder
@@ -1146,7 +1391,7 @@ final_lead_list AS (
             'TIER_1G_ENHANCED_SWEET_SPOT',  -- V3.3.3: Sweet Spot Growth Advisor
             'TIER_1G_GROWTH_STAGE'  -- V3.3.3: Growth Stage (outside sweet spot)
         )
-        AND lws.v4_percentile < 60  -- CHANGED from 70 (V4.1 is more accurate)
+        AND lws.v4_percentile < 60  -- V4.2.0 threshold (unchanged from V4.1.0)
     )
 )
 
@@ -1185,7 +1430,7 @@ SELECT
     final_expected_rate as expected_conversion_rate,
     ROUND(final_expected_rate * 100, 2) as expected_rate_pct,
     
-    -- SCORE NARRATIVE (V3 rules or V4 SHAP)
+    -- SCORE NARRATIVE (V3 rules or V4.2.0 gain-based)
     score_narrative,
     
     has_cfp,
@@ -1199,7 +1444,7 @@ SELECT
         ELSE 'Recyclable - 180+ days no contact'
     END as lead_source_description,
     
-    -- V4.1 Scoring (UPDATED)
+    -- V4.2.0 Scoring
     ROUND(v4_score, 4) as v4_score,
     v4_percentile,
     is_high_v4_standard,
@@ -1209,23 +1454,28 @@ SELECT
         ELSE 'STANDARD'
     END as v4_status,
     
-    -- V4.1 Feature Values (NEW - for transparency)
+    -- V4.2.0 Feature Values (for transparency)
     v4_is_recent_mover,
     v4_days_since_last_move,
     v4_firm_departures_corrected,
     v4_bleeding_velocity_encoded,
     v4_is_dual_registered,
+    v4_age_bucket_encoded,  -- NEW in V4.2.0
     
-    -- V4.1 SHAP Features (for SDR context)
+    -- V4.2.0 Top Features - Gain-based (for SDR context)
+    -- Note: These are gain-based importance, not SHAP values
+    -- Column names kept as shap_* for backwards compatibility
     shap_top1_feature,
     shap_top2_feature,
     shap_top3_feature,
     
-    -- Career Clock Features (V3.4.0)
+    -- Career Clock Features (V3.6.0)
     cc_career_pattern,
     cc_cycle_status,
-    cc_pct_through_cycle,
+    ROUND(cc_pct_through_cycle, 2) as cc_pct_through_cycle,
     cc_months_until_window,
+    cc_is_in_move_window,
+    cc_is_too_early,
     
     -- SGA ASSIGNMENT (NEW!)
     sga_owner,

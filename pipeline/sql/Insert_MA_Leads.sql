@@ -1,11 +1,21 @@
 -- ============================================================================
--- INSERT M&A LEADS INTO LEAD LIST (V3.5.0)
+-- INSERT M&A LEADS INTO LEAD LIST (V3.6.1 + V4.3.1)
 -- ============================================================================
--- Version: V3.5.0_01032026_TWO_QUERY_ARCHITECTURE
+-- Version: V3.6.1_V4.3.1_01082026_TWO_QUERY_ARCHITECTURE
 -- 
 -- PURPOSE:
 -- This query adds M&A leads to the existing january_2026_lead_list table.
 -- Run this AFTER the main lead list query (January_2026_Lead_List_V3_V4_Hybrid.sql)
+-- 
+-- V3.6.1 DEPRIORITIZATION:
+-- Excludes M&A leads with V4 percentile < 20th percentile (bottom 20%)
+-- While M&A tier has 9.0% aggregate conversion, V4 model can identify
+-- individual low-potential leads within the tier (e.g., Michael Puls, 8th percentile)
+-- 
+-- V3.6.1 RECENT PROMOTEE EXCLUSION:
+-- Excludes advisors with <5 years industry tenure and mid/senior titles
+-- These "recent promotees" convert at 0.29-0.45% (6-9x worse than baseline)
+-- Impact: Excludes ~7 low-converting M&A leads from pipeline
 -- 
 -- WHY TWO QUERIES:
 -- BigQuery CTE optimization issues prevent M&A advisors from appearing when
@@ -189,6 +199,69 @@ WHERE ma.crd NOT IN (
 AND (
     (ma.ma_tier = 'TIER_MA_ACTIVE_PRIME' AND ma.expected_conversion_rate >= 0.09)
     OR (ma.ma_tier = 'TIER_MA_ACTIVE' AND ma.expected_conversion_rate >= 0.054)
+)
+-- ============================================================================
+-- V3.6.1: Apply V4 deprioritization to M&A leads
+-- ============================================================================
+-- While M&A tier has 9.0% aggregate conversion (validated on Commonwealth/LPL),
+-- the V4 model can still identify individual low-potential leads within the tier.
+-- Bottom 20% V4 scores convert at 1.21% across all tiers.
+-- 
+-- Example: Michael Puls (CRD 2684129) was 8th percentile but included in M&A tier.
+-- ============================================================================
+AND COALESCE(v4.v4_percentile, 50) >= 20
+-- ============================================================================
+-- V3.6.1: Apply recent promotee exclusion to M&A leads
+-- ============================================================================
+-- Analysis (January 8, 2026) found advisors with <5 years industry tenure
+-- holding mid/senior titles convert at 0.29-0.45% (0.10-0.16x baseline).
+-- 
+-- These "recent promotees" likely don't have portable books yet:
+-- - Recently promoted from junior roles
+-- - Still building client relationships
+-- - May not have decision-making authority to move
+--
+-- Conversion by career stage:
+--   LIKELY_RECENT_PROMOTEE (Senior): 0.29% (0.10x lift) - 348 leads
+--   LIKELY_RECENT_PROMOTEE (Mid):    0.45% (0.16x lift) - 1,567 leads
+--   ESTABLISHED_PRODUCER:            0.73% (0.27x lift) - baseline comparison
+--   FOUNDER_OWNER:                   1.07% (0.39x lift) - DO NOT EXCLUDE
+--
+-- Impact: Excludes ~7 low-converting M&A leads from pipeline
+-- ============================================================================
+AND NOT (
+    -- Less than 5 years industry tenure
+    COALESCE(c.INDUSTRY_TENURE_MONTHS, 0) < 60
+    -- Has mid-level or senior title (suggests promotion)
+    AND (
+        UPPER(c.TITLE_NAME) LIKE '%FINANCIAL ADVISOR%'
+        OR UPPER(c.TITLE_NAME) LIKE '%WEALTH ADVISOR%'
+        OR UPPER(c.TITLE_NAME) LIKE '%INVESTMENT ADVISOR%'
+        OR UPPER(c.TITLE_NAME) LIKE '%FINANCIAL PLANNER%'
+        OR UPPER(c.TITLE_NAME) LIKE '%PORTFOLIO MANAGER%'
+        OR UPPER(c.TITLE_NAME) LIKE '%SENIOR%'
+        OR UPPER(c.TITLE_NAME) LIKE '%DIRECTOR%'
+        OR UPPER(c.TITLE_NAME) LIKE '%MANAGING%'
+        OR UPPER(c.TITLE_NAME) LIKE '%PRINCIPAL%'
+        OR UPPER(c.TITLE_NAME) LIKE '%VP %'
+        OR UPPER(c.TITLE_NAME) LIKE '%VICE PRESIDENT%'
+    )
+    -- Exclude if they're clearly still junior (shouldn't be on list anyway)
+    AND NOT (
+        UPPER(c.TITLE_NAME) LIKE '%ASSOCIATE%'
+        OR UPPER(c.TITLE_NAME) LIKE '%ASSISTANT%'
+        OR UPPER(c.TITLE_NAME) LIKE '%PARAPLANNER%'
+        OR UPPER(c.TITLE_NAME) LIKE '%JUNIOR%'
+        OR UPPER(c.TITLE_NAME) LIKE '%INTERN%'
+        OR UPPER(c.TITLE_NAME) LIKE '%TRAINEE%'
+    )
+    -- DO NOT exclude founders/owners - they convert at 1.07%
+    AND NOT (
+        UPPER(c.TITLE_NAME) LIKE '%FOUNDER%'
+        OR UPPER(c.TITLE_NAME) LIKE '%OWNER%'
+        OR UPPER(c.TITLE_NAME) LIKE '%CEO%'
+        OR UPPER(c.TITLE_NAME) LIKE '% PRESIDENT%'  -- Space before to avoid VP
+    )
 )
 ORDER BY 
     CASE ma.ma_tier 

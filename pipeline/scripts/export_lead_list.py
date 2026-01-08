@@ -30,7 +30,7 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 # ============================================================================
 PROJECT_ID = "savvy-gtm-analytics"
 DATASET = "ml_features"
-TABLE_NAME = "january_2026_lead_list_v4"
+TABLE_NAME = "january_2026_lead_list"
 EXCLUDED_TABLE_NAME = "january_2026_excluded_v3_v4_disagreement"
 
 # ============================================================================

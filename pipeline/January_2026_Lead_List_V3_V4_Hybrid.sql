@@ -1,26 +1,46 @@
 -- ============================================================================
--- JANUARY 2026 LEAD LIST GENERATOR (V3.3.3 + V4.1.0 R3 HYBRID)
+-- JANUARY 2026 LEAD LIST GENERATOR (V3.6.0 + V4.3.0 HYBRID)
 -- ============================================================================
--- Version: 2.4 with V3.3.3 Zero Friction + Sweet Spot Tiers (Updated 2026-01-01)
+-- Version: 3.6.0 with Career Clock Tiers + V4.3.0 Career Clock Features (Updated 2026-01-08)
 -- 
--- V4.1 INTEGRATION CHANGES:
--- - Scores table: ml_features.v4_prospect_scores (SAME NAME, updated with V4.1 scores)
--- - Features: 22 (was 14)
--- - New columns: is_recent_mover, days_since_last_move, firm_departures_corrected,
---                bleeding_velocity_encoded, is_dual_registered
--- - Disagreement threshold: 60th percentile (was 70th) - V4.1 is more accurate
+-- V4.3.0 INTEGRATION CHANGES (January 8, 2026):
+-- - Model: V4.3.0 with Career Clock features (25 features, was 23 in V4.2.0)
+-- - Performance: AUC 0.6389 (+0.58% vs V4.2.0), Lift 2.80x (+22.8% vs V4.2.0), Overfit 0.0353
+-- - Narratives: Gain-based (SHAP fix deferred to V4.4.0 due to XGBoost/SHAP compatibility issue)
+-- - New features: cc_is_in_move_window (2.02% importance), cc_is_too_early
+-- - Scores table: ml_features.v4_prospect_scores (updated with V4.3.0 scores)
 -- 
--- V4.1 PERFORMANCE IMPROVEMENTS:
--- - Test AUC-ROC: 0.620 (+3.5% vs V4.0.0)
--- - Top Decile Lift: 2.03x (+34% vs V4.0.0)
--- - Better bleeding signal detection
+-- V4.2.0 INTEGRATION CHANGES (January 7, 2026):
+-- - Model: V4.2.0 with age_bucket_encoded (23 features, was 22 in V4.1.0)
+-- - Performance: AUC 0.6352 (+1.52%), Lift 2.28x (+12.3%), Overfit 0.0264 (-64.8%)
+-- - Narratives: Gain-based (SHAP TreeExplainer deprecated due to XGBoost serialization bug)
+-- - New feature: age_bucket_encoded (Rank #10, 4.34% importance)
+-- 
+-- V3.5.2 CHANGES (January 7, 2026):
+-- - DISCLOSURE EXCLUSIONS: Exclude advisors with regulatory/legal disclosures
+-- - Exclusions: CRIMINAL, REGULATORY_EVENT, TERMINATION, INVESTIGATION,
+--               CUSTOMER_DISPUTE, CIVIL_EVENT, BOND
+-- - Rationale: Compliance/reputational risk outweighs marginal conversion benefit
+-- - Impact: ~10% of prospects excluded, protects against compliance failures
+-- 
+-- V4.3.0 PERFORMANCE:
+-- - Test AUC-ROC: 0.6389 (+0.58% vs V4.2.0, +2.12% vs V4.1.0)
+-- - Top Decile Lift: 2.80x (+22.8% vs V4.2.0, +37.9% vs V4.1.0)
+-- - Overfitting Gap: 0.0353 (within acceptable range < 0.05)
+-- - Disagreement threshold: 60th percentile (unchanged from V4.1.0)
+-- 
+-- V4.2.0 PERFORMANCE:
+-- - Test AUC-ROC: 0.6352 (+1.52% vs V4.1.0)
+-- - Top Decile Lift: 2.28x (+12.3% vs V4.1.0)
+-- - Overfitting Gap: 0.0264 (-64.8% vs V4.1.0)
 -- 
 -- FEATURES:
 -- - V3 Rules: Tier assignment with rich human-readable narratives
--- - V4.1 XGBoost: Upgrade path with SHAP-based narratives
+-- - V4.3.0 XGBoost: 25 features (23 from V4.2.0 + 2 Career Clock features)
+-- - Narratives: Gain-based feature importance (top 3 features per lead)
 -- - Job Titles: Included in output for SDR context
 -- - Firm Exclusions: Managed in ml_features.excluded_firms table
---                    (easier to maintain - no SQL edits needed)
+-- - Disclosure Exclusions: Applied in base_prospects CTE
 --
 -- FIRM EXCLUSIONS:
 -- - Savvy Advisors, Inc. (CRD 318493) - Internal firm
@@ -28,10 +48,11 @@
 --
 -- ADVISOR EXCLUSIONS:
 -- - Age over 70: Excludes AGE_RANGE values '70-74', '75-79', '80-84', '85-89', '90-94', '95-99'
---   (Applied in base_prospects CTE alongside wirehouse and title exclusions)
---   NOTE: Age 65-69 is now INCLUDED (converts at 2.97%, below baseline but still converts)
+-- - Disclosures: Excludes CRIMINAL, REGULATORY_EVENT, TERMINATION, INVESTIGATION,
+--                CUSTOMER_DISPUTE, CIVIL_EVENT, BOND (V3.5.2)
+-- - Titles: Excludes paraplanner, assistant, operations, compliance, etc.
 --
--- OUTPUT: ml_features.january_2026_lead_list (NEW SINGLE TABLE - replaces old tables)
+-- OUTPUT: ml_features.january_2026_lead_list
 -- ============================================================================
 
 CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.january_2026_lead_list` AS
@@ -234,6 +255,41 @@ base_prospects AS (
       -- Based on age_analysis_results.md analysis (January 7, 2026)
       AND (c.AGE_RANGE IS NULL 
            OR c.AGE_RANGE NOT IN ('70-74', '75-79', '80-84', '85-89', '90-94', '95-99'))
+      
+      -- ========================================================================
+      -- V3.5.2 DISCLOSURE EXCLUSIONS (January 7, 2026)
+      -- ========================================================================
+      -- Exclude advisors with regulatory/legal disclosures
+      -- Based on disclosure_analysis_results.md analysis
+      -- 
+      -- Rationale: While disclosures only reduce conversion by 0.11% (not statistically
+      -- significant), we exclude for compliance/reputational reasons:
+      -- - Advisors with disclosures may fail compliance review
+      -- - Regulatory risk for the RIA
+      -- - E&O insurance considerations
+      -- - Custodian (Schwab/Fidelity) may reject advisors with certain disclosures
+      --
+      -- Impact: Excludes ~10% of prospects, loses ~271 potential MQLs annually
+      -- Benefit: Protects against compliance failures and reputational risk
+      -- ========================================================================
+      
+      -- HARD EXCLUDE: Serious regulatory/legal issues
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_CRIMINAL, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_REGULATORY_EVENT, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_TERMINATION, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_INVESTIGATION, FALSE) = FALSE
+      
+      -- SOFT EXCLUDE: Client/business issues  
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_CUSTOMER_DISPUTE, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_CIVIL_EVENT, FALSE) = FALSE
+      AND COALESCE(c.CONTACT_HAS_DISCLOSED_BOND, FALSE) = FALSE
+      
+      -- NOTE: BANKRUPT and JUDGMENT_OR_LIEN are NOT excluded
+      -- These are personal financial issues that may not affect practice quality
+      -- Uncomment below to exclude if compliance requires:
+      -- AND COALESCE(c.CONTACT_HAS_DISCLOSED_BANKRUPT, FALSE) = FALSE
+      -- AND COALESCE(c.CONTACT_HAS_DISCLOSED_JUDGMENT_OR_LIEN, FALSE) = FALSE
+      
       -- Title exclusions
       AND NOT (
           UPPER(c.TITLE_NAME) LIKE '%FINANCIAL SOLUTIONS ADVISOR%'
@@ -338,32 +394,44 @@ enriched_prospects AS (
 ),
 
 -- ============================================================================
--- J2. JOIN V4 SCORES + SHAP NARRATIVES + V4.1 FEATURES
+-- J2. JOIN V4.2.0 SCORES + GAIN-BASED NARRATIVES + V4.2.0 FEATURES
+-- ============================================================================
+-- V4.2.0 Changes:
+-- - 23 features (added age_bucket_encoded)
+-- - Gain-based narratives (SHAP deprecated due to XGBoost base_score bug)
+-- - Improved performance: AUC 0.6352, Lift 2.28x
 -- ============================================================================
 v4_enriched AS (
     SELECT 
         ep.*,
-        -- V4.1 Score and percentile (from v4_prospect_scores table)
+        -- V4.2.0 Score and percentile (from v4_prospect_scores table)
         COALESCE(v4.v4_score, 0.5) as v4_score,
         COALESCE(v4.v4_percentile, 50) as v4_percentile,
         COALESCE(v4.v4_deprioritize, FALSE) as v4_deprioritize,
         COALESCE(v4.v4_upgrade_candidate, FALSE) as v4_upgrade_candidate,
         
-        -- V4.1 SHAP narratives (from scores table)
+        -- V4.2.0 Gain-based narratives (replaces SHAP)
+        -- Note: Column names kept as shap_* for backwards compatibility with downstream CTEs
+        -- but values are now gain-based feature importance (not SHAP values)
         v4.shap_top1_feature,
         v4.shap_top1_value,
         v4.shap_top2_feature,
         v4.shap_top2_value,
         v4.shap_top3_feature,
         v4.shap_top3_value,
-        v4.v4_narrative as v4_shap_narrative,
+        v4.v4_narrative as v4_narrative,
         
-        -- NEW V4.1 Feature columns (from v4_prospect_features table)
+        -- V4.3.0 Feature columns (25 features including Career Clock)
         COALESCE(v4f.is_recent_mover, 0) as v4_is_recent_mover,
         COALESCE(v4f.days_since_last_move, 9999) as v4_days_since_last_move,
         COALESCE(v4f.firm_departures_corrected, 0) as v4_firm_departures_corrected,
         COALESCE(v4f.bleeding_velocity_encoded, 0) as v4_bleeding_velocity_encoded,
-        COALESCE(v4f.is_dual_registered, 0) as v4_is_dual_registered
+        COALESCE(v4f.is_dual_registered, 0) as v4_is_dual_registered,
+        -- V4.2.0: Age feature
+        COALESCE(v4f.age_bucket_encoded, 2) as v4_age_bucket_encoded,  -- Default to 50-64 bucket
+        -- V4.3.0: Career Clock features (NEW)
+        COALESCE(v4f.cc_is_in_move_window, 0) as v4_cc_is_in_move_window,
+        COALESCE(v4f.cc_is_too_early, 0) as v4_cc_is_too_early
     FROM enriched_prospects ep
     LEFT JOIN `savvy-gtm-analytics.ml_features.v4_prospect_scores` v4 
         ON ep.crd = v4.crd
@@ -372,9 +440,10 @@ v4_enriched AS (
 ),
 
 -- ============================================================================
--- K. APPLY V4 DEPRIORITIZATION FILTER (Bottom 20% excluded)
+-- K. APPLY V4.3.0 DEPRIORITIZATION FILTER (Bottom 20% excluded)
 -- ============================================================================
--- Optimization: Remove bottom 20% V4 scores to improve overall conversion rate
+-- Optimization: Remove bottom 20% V4.3.0 scores to improve overall conversion rate
+-- V4.3.0 bottom 20% converts at low rate - strong deprioritization signal
 v4_filtered AS (
     SELECT *
     FROM v4_enriched
@@ -615,7 +684,7 @@ tier_limited AS (
             WHEN df.score_tier = 'TIER_1A_PRIME_MOVER_CFP' THEN 0.0274  -- Updated from optimization
             ELSE df.expected_conversion_rate 
         END as final_expected_rate,
-        -- FINAL NARRATIVE: V3 or High-V4 STANDARD (with SHAP features)
+        -- FINAL NARRATIVE: V3 or High-V4 STANDARD (with gain-based top features)
         CASE 
             WHEN df.score_tier = 'STANDARD' AND df.v4_percentile >= 80 THEN
                 CONCAT(
@@ -937,23 +1006,24 @@ leads_with_sga AS (
 ),
 
 -- ============================================================================
--- R. FINAL LEAD LIST (Exclude V3/V4.1 disagreement leads)
+-- R. FINAL LEAD LIST (Exclude V3/V4.2.0 disagreement leads)
 -- ============================================================================
--- V4.1 has better lift (2.03x vs 1.51x), so we can be more aggressive
--- Updated threshold from 70th to 60th percentile for disagreement filtering
+-- V4.2.0 has strong lift (2.28x), so we maintain aggressive filtering
+-- Threshold: 60th percentile for disagreement filtering (unchanged from V4.1.0)
 -- 
--- Logic: Tier 1 leads with V4.1 < 60th percentile are likely false positives
--- V4.1 now has bleeding signal built-in, so it better understands V3 rules
+-- Logic: Tier 1 leads with V4.3.0 < 60th percentile are likely false positives
+-- V4.3.0 now includes Career Clock features and improved performance
 -- 
--- NOTE: Deduplication already happened BEFORE SGA assignment, so no need to dedupe again
+-- NOTE: Disclosure exclusions already applied in base_prospects CTE
+-- NOTE: Deduplication already happened BEFORE SGA assignment
 -- ============================================================================
 final_lead_list AS (
     SELECT 
         lws.*
     FROM leads_with_sga lws
     WHERE NOT (
-        -- V3/V4.1 Disagreement Filter
-        -- Exclude Tier 1 leads where V4.1 < 60th percentile (was 70th for V4.0)
+        -- V3/V4.2.0 Disagreement Filter
+        -- Exclude Tier 1 leads where V4.2.0 < 60th percentile
         lws.score_tier IN (
             'TIER_1A_PRIME_MOVER_CFP',
             'TIER_1B_PRIME_ZERO_FRICTION',  -- V3.3.3: Zero Friction Bleeder
@@ -963,7 +1033,7 @@ final_lead_list AS (
             'TIER_1G_ENHANCED_SWEET_SPOT',  -- V3.3.3: Sweet Spot Growth Advisor
             'TIER_1G_GROWTH_STAGE'  -- V3.3.3: Growth Stage (outside sweet spot)
         )
-        AND lws.v4_percentile < 60  -- CHANGED from 70 (V4.1 is more accurate)
+        AND lws.v4_percentile < 60  -- V4.3.0 threshold (unchanged from V4.1.0)
     )
 )
 
@@ -1002,7 +1072,7 @@ SELECT
     final_expected_rate as expected_conversion_rate,
     ROUND(final_expected_rate * 100, 2) as expected_rate_pct,
     
-    -- SCORE NARRATIVE (V3 rules or V4 SHAP)
+    -- SCORE NARRATIVE (V3 rules or V4.2.0 gain-based)
     score_narrative,
     
     has_cfp,
@@ -1016,7 +1086,7 @@ SELECT
         ELSE 'Recyclable - 180+ days no contact'
     END as lead_source_description,
     
-    -- V4.1 Scoring (UPDATED)
+    -- V4.2.0 Scoring
     ROUND(v4_score, 4) as v4_score,
     v4_percentile,
     is_high_v4_standard,
@@ -1026,14 +1096,17 @@ SELECT
         ELSE 'STANDARD'
     END as v4_status,
     
-    -- V4.1 Feature Values (NEW - for transparency)
+    -- V4.2.0 Feature Values (for transparency)
     v4_is_recent_mover,
     v4_days_since_last_move,
     v4_firm_departures_corrected,
     v4_bleeding_velocity_encoded,
     v4_is_dual_registered,
+    v4_age_bucket_encoded,  -- NEW in V4.2.0
     
-    -- V4.1 SHAP Features (for SDR context)
+    -- V4.2.0 Top Features - Gain-based (for SDR context)
+    -- Note: These are gain-based importance, not SHAP values
+    -- Column names kept as shap_* for backwards compatibility
     shap_top1_feature,
     shap_top2_feature,
     shap_top3_feature,

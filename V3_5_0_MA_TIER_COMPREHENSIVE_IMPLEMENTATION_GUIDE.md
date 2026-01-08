@@ -752,12 +752,12 @@ enriched_prospects AS (
         -- ============================================================
         -- V3.5.0: M&A ADVISOR FIELDS
         -- ============================================================
-        CASE WHEN ma.crd IS NOT NULL THEN 1 ELSE 0 END as is_at_ma_target_firm,
-        ma.ma_status,
-        ma.days_since_first_news as ma_days_since_news,
-        ma.ma_firm_size,
-        ma.is_senior_title as ma_is_senior_title,
-        ma.is_mid_career as ma_is_mid_career,
+CASE WHEN ma.crd IS NOT NULL THEN 1 ELSE 0 END as is_at_ma_target_firm,
+ma.ma_status,
+ma.days_since_first_news as ma_days_since_news,
+ma.ma_firm_size,
+ma.is_senior_title as ma_is_senior_title,
+ma.is_mid_career as ma_is_mid_career,
         ma.ma_tier,
         ma.expected_conversion_rate as ma_expected_conversion_rate,
         ma.expected_lift as ma_expected_lift
@@ -812,19 +812,19 @@ scored_prospects AS (
         ep.*,
         
         -- Tier Assignment (V3.5.0 with M&A tiers)
-        CASE
+CASE 
             -- ============================================================
             -- V3.5.0: M&A ACTIVE TIERS (HIGHEST PRIORITY FOR M&A FIRMS)
             -- These override normal large firm exclusions
             -- ============================================================
-            WHEN ep.is_at_ma_target_firm = 1 
+    WHEN ep.is_at_ma_target_firm = 1
                  AND ep.ma_tier = 'TIER_MA_ACTIVE_PRIME'
-            THEN 'TIER_MA_ACTIVE_PRIME'
-            
-            WHEN ep.is_at_ma_target_firm = 1 
+    THEN 'TIER_MA_ACTIVE_PRIME'
+    
+    WHEN ep.is_at_ma_target_firm = 1
                  AND ep.ma_tier = 'TIER_MA_ACTIVE'
-            THEN 'TIER_MA_ACTIVE'
-            
+    THEN 'TIER_MA_ACTIVE'
+    
             -- ============================================================
             -- CAREER CLOCK TIERS (V3.4.0) - Check after M&A
             -- ============================================================
