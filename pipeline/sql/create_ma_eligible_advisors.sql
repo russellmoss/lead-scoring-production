@@ -68,10 +68,19 @@ ma_advisors AS (
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
     INNER JOIN ma_firms ma ON SAFE_CAST(c.PRIMARY_FIRM AS INT64) = ma.firm_crd
     LEFT JOIN advisor_tenure adv_tenure ON c.RIA_CONTACT_CRD_ID = adv_tenure.crd
-    WHERE c.PRODUCING_ADVISOR = TRUE
+    WHERE COALESCE(LOWER(TRIM(CAST(c.PRODUCING_ADVISOR AS STRING))), '') = 'true'
       AND c.CONTACT_FIRST_NAME IS NOT NULL
       AND c.CONTACT_LAST_NAME IS NOT NULL
       AND c.PRIMARY_FIRM IS NOT NULL
+      -- Title exclusions (same as main lead list)
+      AND NOT (
+          UPPER(c.TITLE_NAME) LIKE '%CHIEF FINANCIAL OFFICER%'
+          OR UPPER(c.TITLE_NAME) LIKE '%CFO%'
+          OR UPPER(c.TITLE_NAME) LIKE '%CHIEF INVESTMENT OFFICER%'
+          OR UPPER(c.TITLE_NAME) LIKE '%CIO%'
+          OR UPPER(c.TITLE_NAME) LIKE '%VICE PRESIDENT%'
+          OR UPPER(c.TITLE_NAME) LIKE '%VP %'  -- VP with space to avoid false positives
+      )
 )
 
 SELECT 

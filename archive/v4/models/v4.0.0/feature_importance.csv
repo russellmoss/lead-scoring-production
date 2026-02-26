@@ -1,0 +1,15 @@
+feature,importance
+mobility_tier,178.8465576171875
+has_email,158.8702850341797
+tenure_bucket,143.15847778320312
+mobility_x_heavy_bleeding,117.26156616210938
+has_linkedin,110.45682525634766
+firm_stability_tier,101.07793426513672
+is_wirehouse,84.76405334472656
+firm_rep_count_at_contact,83.30191802978516
+short_tenure_x_high_mobility,81.94727325439453
+firm_net_change_12mo,71.99468994140625
+is_broker_protocol,64.25579071044922
+experience_bucket,64.1676254272461
+has_firm_data,55.47613525390625
+is_experience_missing,39.043617248535156

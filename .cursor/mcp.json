@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "bigquery": {
+      "command": "C:\\Users\\russe\\toolbox.exe",
+      "args": ["--prebuilt", "bigquery", "--stdio"],
+      "env": {
+        "BIGQUERY_PROJECT": "savvy-gtm-analytics"
+      }
+    }
+  }
+}

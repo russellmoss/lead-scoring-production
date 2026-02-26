@@ -87,11 +87,11 @@ firm_discretionary AS (
         CRD_ID as firm_crd,
         TOTAL_AUM,
         DISCRETIONARY_AUM,
-        SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) as discretionary_ratio,
+        SAFE_DIVIDE(SAFE_CAST(DISCRETIONARY_AUM AS FLOAT64), SAFE_CAST(TOTAL_AUM AS FLOAT64)) as discretionary_ratio,
         CASE 
-            WHEN TOTAL_AUM IS NULL OR TOTAL_AUM = 0 THEN 'UNKNOWN'
-            WHEN SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) < 0.50 THEN 'LOW_DISCRETIONARY'
-            WHEN SAFE_DIVIDE(DISCRETIONARY_AUM, TOTAL_AUM) >= 0.80 THEN 'HIGH_DISCRETIONARY'
+            WHEN TOTAL_AUM IS NULL OR SAFE_CAST(TOTAL_AUM AS FLOAT64) = 0 THEN 'UNKNOWN'
+            WHEN SAFE_DIVIDE(SAFE_CAST(DISCRETIONARY_AUM AS FLOAT64), SAFE_CAST(TOTAL_AUM AS FLOAT64)) < 0.50 THEN 'LOW_DISCRETIONARY'
+            WHEN SAFE_DIVIDE(SAFE_CAST(DISCRETIONARY_AUM AS FLOAT64), SAFE_CAST(TOTAL_AUM AS FLOAT64)) >= 0.80 THEN 'HIGH_DISCRETIONARY'
             ELSE 'MODERATE_DISCRETIONARY'
         END as discretionary_tier
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
@@ -106,14 +106,14 @@ firm_account_size AS (
         CRD_ID as firm_crd,
         TOTAL_AUM,
         TOTAL_ACCOUNTS,
-        SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) as avg_account_size,
+        SAFE_DIVIDE(SAFE_CAST(TOTAL_AUM AS FLOAT64), SAFE_CAST(TOTAL_ACCOUNTS AS FLOAT64)) as avg_account_size,
         CASE 
-            WHEN SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) >= 250000 THEN 'ESTABLISHED'
-            WHEN SAFE_DIVIDE(TOTAL_AUM, TOTAL_ACCOUNTS) IS NULL THEN 'UNKNOWN'
+            WHEN SAFE_DIVIDE(SAFE_CAST(TOTAL_AUM AS FLOAT64), SAFE_CAST(TOTAL_ACCOUNTS AS FLOAT64)) >= 250000 THEN 'ESTABLISHED'
+            WHEN SAFE_DIVIDE(SAFE_CAST(TOTAL_AUM AS FLOAT64), SAFE_CAST(TOTAL_ACCOUNTS AS FLOAT64)) IS NULL THEN 'UNKNOWN'
             ELSE 'GROWTH_STAGE'
         END as practice_maturity
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_firms_current`
-    WHERE TOTAL_AUM > 0 AND TOTAL_ACCOUNTS > 0
+    WHERE SAFE_CAST(TOTAL_AUM AS FLOAT64) > 0 AND SAFE_CAST(TOTAL_ACCOUNTS AS FLOAT64) > 0
 ),
 
 -- V3.3.3: Portable custodian flag for T1B_PRIME tier
@@ -279,7 +279,7 @@ lead_certifications AS (
     FROM leads_with_flags l
     LEFT JOIN `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
         ON SAFE_CAST(REGEXP_REPLACE(CAST(l.advisor_crd AS STRING), r'[^0-9]', '') AS INT64) = c.RIA_CONTACT_CRD_ID
-    WHERE c.PRODUCING_ADVISOR = TRUE  -- V3.2.3: Filter to only producing advisors
+    WHERE COALESCE(LOWER(TRIM(CAST(c.PRODUCING_ADVISOR AS STRING))), '') = 'true'  -- V3.2.3: Filter to only producing advisors
 ),
 
 -- Join certifications to leads
@@ -310,9 +310,9 @@ leads_with_certs AS (
     FROM leads_with_flags l
     INNER JOIN lead_certifications cert
         ON l.lead_id = cert.lead_id
-    LEFT JOIN firm_discretionary fd ON cert.firm_crd = fd.firm_crd
-    LEFT JOIN firm_account_size fas ON cert.firm_crd = fas.firm_crd
-    LEFT JOIN firm_custodian fc ON cert.firm_crd = fc.firm_crd
+    LEFT JOIN firm_discretionary fd ON SAFE_CAST(cert.firm_crd AS INT64) = SAFE_CAST(fd.firm_crd AS INT64)
+    LEFT JOIN firm_account_size fas ON SAFE_CAST(cert.firm_crd AS INT64) = SAFE_CAST(fas.firm_crd AS INT64)
+    LEFT JOIN firm_custodian fc ON SAFE_CAST(cert.firm_crd AS INT64) = SAFE_CAST(fc.firm_crd AS INT64)
     WHERE COALESCE(cert.is_excluded_title, 0) = 0  -- Exclude leads with excluded titles
       -- V3.3.1: Exclude low discretionary firms (0.34x baseline)
       -- Allow NULL/Unknown - don't penalize missing data
@@ -320,7 +320,7 @@ leads_with_certs AS (
           fd.discretionary_ratio >= 0.50 
           OR fd.discretionary_ratio IS NULL
           OR fd.TOTAL_AUM IS NULL 
-          OR fd.TOTAL_AUM = 0
+          OR SAFE_CAST(fd.TOTAL_AUM AS FLOAT64) = 0
       )
       -- Note: PRODUCING_ADVISOR = TRUE filter already applied in lead_certifications CTE
 ),

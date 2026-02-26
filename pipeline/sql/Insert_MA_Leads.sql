@@ -96,7 +96,7 @@ SELECT
     c.LINKEDIN_PROFILE_URL as linkedin_url,
     CASE WHEN c.LINKEDIN_PROFILE_URL IS NOT NULL AND TRIM(c.LINKEDIN_PROFILE_URL) != '' THEN 1 ELSE 0 END as has_linkedin,
     ma.job_title,
-    TRUE as producing_advisor,  -- All M&A advisors are producing
+    'true' as producing_advisor,  -- All M&A advisors are producing
     ma.firm_name,
     ma.firm_crd,
     ma.ma_firm_size as firm_rep_count,
@@ -104,9 +104,9 @@ SELECT
     CAST(NULL AS INT64) as firm_arrivals_12mo,
     CAST(NULL AS INT64) as firm_departures_12mo,
     CAST(NULL AS FLOAT64) as firm_turnover_pct,
-    DATE_DIFF(CURRENT_DATE(), ma.firm_start_date, MONTH) as tenure_months,
-    DATE_DIFF(CURRENT_DATE(), ma.firm_start_date, YEAR) as tenure_years,
-    DATE_DIFF(CURRENT_DATE(), ma.firm_start_date, YEAR) as industry_tenure_years,  -- Approximate
+    DATE_DIFF(CURRENT_DATE(), SAFE_CAST(ma.firm_start_date AS DATE), MONTH) as tenure_months,
+    DATE_DIFF(CURRENT_DATE(), SAFE_CAST(ma.firm_start_date AS DATE), YEAR) as tenure_years,
+    DATE_DIFF(CURRENT_DATE(), SAFE_CAST(ma.firm_start_date AS DATE), YEAR) as industry_tenure_years,  -- Approximate
     CAST(NULL AS INT64) as num_prior_firms,
     CAST(NULL AS INT64) as moves_3yr,
     ma.ma_tier as original_v3_tier,
@@ -231,7 +231,7 @@ AND COALESCE(v4.v4_percentile, 50) >= 20
 -- ============================================================================
 AND NOT (
     -- Less than 5 years industry tenure
-    COALESCE(c.INDUSTRY_TENURE_MONTHS, 0) < 60
+    COALESCE(SAFE_CAST(c.INDUSTRY_TENURE_MONTHS AS INT64), 0) < 60
     -- Has mid-level or senior title (suggests promotion)
     AND (
         UPPER(c.TITLE_NAME) LIKE '%FINANCIAL ADVISOR%'

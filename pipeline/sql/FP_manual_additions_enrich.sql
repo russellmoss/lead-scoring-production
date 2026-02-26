@@ -1,0 +1,40 @@
+-- Enrich FP_manual_additions from FinTrx ria_contacts_current by matching CRD = RIA_CONTACT_CRD_ID.
+-- Replaces firm with PRIMARY_FIRM_NAME; enriches linkedin, PRIMARY_FIRM_TOTAL_AUM, REP_AUM, PRODUCING_ADVISOR.
+-- Column order preserved: firm, name, title, linkedin, CRD, PRIMARY_FIRM_TOTAL_AUM, REP_AUM, PRODUCING_ADVISOR.
+
+CREATE OR REPLACE TABLE `savvy-gtm-analytics.ml_features.FP_manual_additions` AS
+WITH
+fintrx_one AS (
+  SELECT
+    RIA_CONTACT_CRD_ID,
+    LINKEDIN_PROFILE_URL,
+    PRIMARY_FIRM_NAME,
+    PRIMARY_FIRM_TOTAL_AUM,
+    REP_AUM,
+    PRODUCING_ADVISOR
+  FROM (
+    SELECT
+      RIA_CONTACT_CRD_ID,
+      LINKEDIN_PROFILE_URL,
+      PRIMARY_FIRM_NAME,
+      PRIMARY_FIRM_TOTAL_AUM,
+      REP_AUM,
+      PRODUCING_ADVISOR,
+      ROW_NUMBER() OVER (PARTITION BY RIA_CONTACT_CRD_ID ORDER BY RIA_CONTACT_CRD_ID) AS rn
+    FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current`
+    WHERE RIA_CONTACT_CRD_ID IS NOT NULL
+  )
+  WHERE rn = 1
+)
+SELECT
+  COALESCE(c.PRIMARY_FIRM_NAME, m.firm) AS firm,
+  m.name,
+  m.title,
+  COALESCE(c.LINKEDIN_PROFILE_URL, m.linkedin) AS linkedin,
+  m.CRD,
+  COALESCE(SAFE_CAST(c.PRIMARY_FIRM_TOTAL_AUM AS STRING), m.PRIMARY_FIRM_TOTAL_AUM) AS PRIMARY_FIRM_TOTAL_AUM,
+  COALESCE(SAFE_CAST(c.REP_AUM AS STRING), m.REP_AUM) AS REP_AUM,
+  COALESCE(SAFE_CAST(c.PRODUCING_ADVISOR AS STRING), m.PRODUCING_ADVISOR) AS PRODUCING_ADVISOR
+FROM `savvy-gtm-analytics.ml_features.FP_manual_additions` m
+LEFT JOIN fintrx_one c
+  ON m.CRD = c.RIA_CONTACT_CRD_ID;

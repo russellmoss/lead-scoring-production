@@ -80,8 +80,8 @@ base_prospects AS (
         CURRENT_DATE() as prediction_date
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
     WHERE c.RIA_CONTACT_CRD_ID IS NOT NULL
-      AND c.PRODUCING_ADVISOR = TRUE
-      AND c.ACTIVE = TRUE
+      AND COALESCE(LOWER(TRIM(CAST(c.PRODUCING_ADVISOR AS STRING))), '') = 'true'
+      AND COALESCE(LOWER(TRIM(CAST(c.ACTIVE AS STRING))), '') = 'true'
 ),
 
 -- ============================================================================
@@ -118,13 +118,13 @@ current_snapshot AS (
         bp.firm_name,
         bp.firm_start_date,
         CASE 
-            WHEN bp.firm_start_date IS NOT NULL AND bp.firm_start_date <= bp.prediction_date 
-            THEN DATE_DIFF(bp.prediction_date, bp.firm_start_date, MONTH)
+            WHEN bp.firm_start_date IS NOT NULL AND SAFE_CAST(bp.firm_start_date AS DATE) <= bp.prediction_date 
+            THEN DATE_DIFF(bp.prediction_date, SAFE_CAST(bp.firm_start_date AS DATE), MONTH)
             ELSE NULL
         END as tenure_months
     FROM base_prospects bp
     WHERE bp.firm_start_date IS NOT NULL
-      AND bp.firm_start_date <= bp.prediction_date
+      AND SAFE_CAST(bp.firm_start_date AS DATE) <= bp.prediction_date
 ),
 
 -- Combine: prefer history, fallback to current snapshot
@@ -134,11 +134,11 @@ current_firm AS (
         COALESCE(hf.prediction_date, cs.prediction_date) as prediction_date,
         COALESCE(hf.firm_crd_from_history, cs.firm_crd) as firm_crd,
         COALESCE(hf.firm_name_from_history, cs.firm_name) as firm_name,
-        COALESCE(hf.firm_start_date_from_history, cs.firm_start_date) as firm_start_date,
+        COALESCE(hf.firm_start_date_from_history, SAFE_CAST(cs.firm_start_date AS DATE)) as firm_start_date,
         COALESCE(hf.tenure_months, cs.tenure_months) as tenure_months,
         -- Calculate tenure_days for V4.1 feature
         DATE_DIFF(COALESCE(hf.prediction_date, cs.prediction_date), 
-                  COALESCE(hf.firm_start_date_from_history, cs.firm_start_date), 
+                  COALESCE(hf.firm_start_date_from_history, SAFE_CAST(cs.firm_start_date AS DATE)), 
                   DAY) as tenure_days
     FROM history_firm hf
     FULL OUTER JOIN current_snapshot cs
@@ -148,7 +148,7 @@ current_firm AS (
         PARTITION BY COALESCE(hf.crd, cs.crd)
         ORDER BY 
             CASE WHEN hf.crd IS NOT NULL THEN 1 ELSE 2 END,  -- Prefer history
-            COALESCE(hf.firm_start_date_from_history, cs.firm_start_date) DESC
+            COALESCE(hf.firm_start_date_from_history, SAFE_CAST(cs.firm_start_date AS DATE)) DESC
     ) = 1
 ),
 
@@ -164,7 +164,7 @@ industry_tenure AS (
         -- Use pre-calculated industry tenure from ria_contacts_current
         -- Subtract current firm tenure to get prior experience
         GREATEST(
-            COALESCE(c.INDUSTRY_TENURE_MONTHS, 0) - COALESCE(cf.tenure_months, 0),
+            COALESCE(SAFE_CAST(c.INDUSTRY_TENURE_MONTHS AS INT64), 0) - COALESCE(cf.tenure_months, 0),
             0
         ) as industry_tenure_months
     FROM current_firm cf
@@ -224,8 +224,8 @@ firm_rep_count_agg AS (
         COUNT(DISTINCT RIA_CONTACT_CRD_ID) as rep_count
     FROM `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current`
     WHERE PRIMARY_FIRM IS NOT NULL
-      AND PRODUCING_ADVISOR = TRUE
-      AND ACTIVE = TRUE
+      AND COALESCE(LOWER(TRIM(CAST(PRODUCING_ADVISOR AS STRING))), '') = 'true'
+      AND COALESCE(LOWER(TRIM(CAST(ACTIVE AS STRING))), '') = 'true'
     GROUP BY 1
 ),
 
@@ -283,8 +283,8 @@ broker_protocol AS (
 experience AS (
     SELECT
         bp.crd,
-        COALESCE(it.industry_tenure_months, c.INDUSTRY_TENURE_MONTHS, 0) / 12.0 as experience_years,
-        CASE WHEN COALESCE(it.industry_tenure_months, c.INDUSTRY_TENURE_MONTHS) IS NULL THEN 1 ELSE 0 END as is_experience_missing
+        COALESCE(it.industry_tenure_months, SAFE_CAST(c.INDUSTRY_TENURE_MONTHS AS INT64), 0) / 12.0 as experience_years,
+        CASE WHEN COALESCE(it.industry_tenure_months, SAFE_CAST(c.INDUSTRY_TENURE_MONTHS AS INT64)) IS NULL THEN 1 ELSE 0 END as is_experience_missing
     FROM base_prospects bp
     LEFT JOIN industry_tenure it ON bp.crd = it.crd
     LEFT JOIN `savvy-gtm-analytics.FinTrx_data_CA.ria_contacts_current` c
@@ -543,7 +543,7 @@ recent_promotee_feature AS (
         bp.crd,
         CASE 
             -- Less than 5 years industry tenure (60 months)
-            WHEN COALESCE(it.industry_tenure_months, c.INDUSTRY_TENURE_MONTHS, 0) < 60
+            WHEN COALESCE(it.industry_tenure_months, SAFE_CAST(c.INDUSTRY_TENURE_MONTHS AS INT64), 0) < 60
             -- Has mid-level or senior title (suggests promotion)
             AND (
                 UPPER(c.TITLE_NAME) LIKE '%FINANCIAL ADVISOR%'

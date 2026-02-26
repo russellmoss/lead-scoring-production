@@ -102,6 +102,13 @@ base_prospects AS (
           OR UPPER(c.TITLE_NAME) LIKE '%ASSISTANT%'
           OR UPPER(c.TITLE_NAME) LIKE '%INSURANCE AGENT%'
           OR UPPER(c.TITLE_NAME) LIKE '%INSURANCE%'
+          -- Executive/Senior title exclusions
+          OR UPPER(c.TITLE_NAME) LIKE '%CHIEF FINANCIAL OFFICER%'
+          OR UPPER(c.TITLE_NAME) LIKE '%CFO%'
+          OR UPPER(c.TITLE_NAME) LIKE '%CHIEF INVESTMENT OFFICER%'
+          OR UPPER(c.TITLE_NAME) LIKE '%CIO%'
+          OR UPPER(c.TITLE_NAME) LIKE '%VICE PRESIDENT%'
+          OR UPPER(c.TITLE_NAME) LIKE '%VP %'  -- VP with space to avoid false positives
       )
 ),
 
