@@ -1,0 +1,77 @@
+{
+  "timestamp": "2025-12-26T16:30:08.118607",
+  "analysis": "Lead List Optimization - Final Results",
+  "optimization_applied": {
+    "v4_upgrade_removed": true,
+    "v4_deprioritization_applied": true,
+    "standard_high_v4_backfill_used": true
+  },
+  "final_estimates": {
+    "total_leads": 2768,
+    "point_estimate_pct": 4.61,
+    "conservative_p10_pct": 3.85,
+    "prob_exceed_6pct": 2.0,
+    "expected_mqls": 128.0,
+    "per_sga_leads": 198.0,
+    "per_sga_mqls": 9.1
+  },
+  "baseline_comparison": {
+    "baseline_rate": 2.737,
+    "improvement_absolute_pp": 1.8736,
+    "improvement_relative_pct": 68.46,
+    "prob_exceed_baseline": 99.98,
+    "prob_exceed_4pct": 83.96,
+    "prob_exceed_5pct": 25.3,
+    "prob_exceed_6pct": 2.02
+  },
+  "tier_performance": {
+    "TIER_1A_PRIME_MOVER_CFP": {
+      "rate_pct": 50.0,
+      "sample_size": 6
+    },
+    "TIER_1B_PRIME_MOVER_SERIES65": {
+      "rate_pct": 11.76,
+      "sample_size": 34
+    },
+    "TIER_1D_SMALL_FIRM": {
+      "rate_pct": 11.11,
+      "sample_size": 27
+    },
+    "TIER_3_EXPERIENCED_MOVER": {
+      "rate_pct": 6.76,
+      "sample_size": 74
+    },
+    "TIER_1F_HV_WEALTH_BLEEDER": {
+      "rate_pct": 6.06,
+      "sample_size": 99
+    },
+    "TIER_2A_PROVEN_MOVER": {
+      "rate_pct": 5.91,
+      "sample_size": 711
+    },
+    "TIER_1E_PRIME_MOVER": {
+      "rate_pct": 4.76,
+      "sample_size": 42
+    },
+    "TIER_2B_MODERATE_BLEEDER": {
+      "rate_pct": 3.7,
+      "sample_size": 54
+    },
+    "TIER_4_HEAVY_BLEEDER": {
+      "rate_pct": 3.42,
+      "sample_size": 614
+    },
+    "STANDARD": {
+      "rate_pct": 2.6,
+      "sample_size": 30588
+    },
+    "TIER_1C_PRIME_MOVER_SMALL": {
+      "rate_pct": 0.0,
+      "sample_size": 15
+    },
+    "STANDARD_HIGH_V4": {
+      "rate_pct": 3.67,
+      "sample_size": 6043
+    }
+  }
+}

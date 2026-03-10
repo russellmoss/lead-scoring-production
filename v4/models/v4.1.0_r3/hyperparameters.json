@@ -1,0 +1,58 @@
+{
+  "version": "v4.1.0_r3",
+  "created": "2025-12-30T13:30:50.353802",
+  "hyperparameters": {
+    "objective": "binary:logistic",
+    "eval_metric": [
+      "auc",
+      "logloss"
+    ],
+    "max_depth": 2,
+    "min_child_weight": 30,
+    "reg_alpha": 1.0,
+    "reg_lambda": 5.0,
+    "gamma": 0.3,
+    "learning_rate": 0.01,
+    "n_estimators": 2000,
+    "subsample": 0.6,
+    "colsample_bytree": 0.6,
+    "base_score": 0.5,
+    "seed": 42,
+    "verbosity": 1
+  },
+  "r2_comparison": {
+    "max_depth": 3,
+    "min_child_weight": 20,
+    "reg_alpha": 0.5,
+    "reg_lambda": 3.0,
+    "gamma": 0.2,
+    "learning_rate": 0.02,
+    "n_estimators": 1000,
+    "subsample": 0.7,
+    "colsample_bytree": 0.7,
+    "early_stopping_rounds": 100
+  },
+  "feature_count": 22,
+  "removed_features": {
+    "industry_tenure_months": {
+      "reason": "Redundant with experience_years",
+      "correlation": 0.96,
+      "correlated_with": "experience_years"
+    },
+    "tenure_bucket_x_mobility": {
+      "reason": "Redundant with mobility_3yr",
+      "correlation": 0.94,
+      "correlated_with": "mobility_3yr"
+    },
+    "independent_ria_x_ia_rep": {
+      "reason": "Redundant with is_ia_rep_type",
+      "correlation": 0.97,
+      "correlated_with": "is_ia_rep_type"
+    },
+    "recent_mover_x_bleeding": {
+      "reason": "Redundant with is_recent_mover",
+      "correlation": 0.9,
+      "correlated_with": "is_recent_mover"
+    }
+  }
+}
